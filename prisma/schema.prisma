@@ -1,0 +1,74 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ObjectStatus {
+  created
+  mutated
+  deleted
+}
+
+model Object {
+  id           String       @id @db.VarChar(66)
+  owner        String       @db.VarChar(66)
+  type         String?      @db.VarChar(1000)
+  status       ObjectStatus
+  fieldsRaw    String       @map("field_raw")
+  fields       Json?
+  display      Json         @default("{}")
+  lastTxDigist String?      @map("last_tx_digist") @db.VarChar(66)
+  version      BigInt
+  updatedAt    DateTime     @default(dbgenerated("NOW()")) @map("updated_at")
+  createdAt    DateTime     @default(dbgenerated("NOW()")) @map("created_at")
+
+  @@index([owner])
+  @@index([type])
+  @@index([owner, type])
+  @@index([updatedAt(sort: Desc)])
+  @@map("objects")
+}
+
+model ObjectType {
+  id        String   @id @db.VarChar(1000)
+  fields    String
+  version   BigInt
+  updatedAt DateTime @default(dbgenerated("NOW()")) @map("updated_at")
+  createdAt DateTime @default(dbgenerated("NOW()")) @map("created_at")
+
+  @@map("object_types")
+}
+
+model Package {
+  id           String   @id @db.VarChar(66)
+  serialized   String
+  version      BigInt
+  lastTxDigist String?  @map("last_tx_digist") @db.VarChar(66)
+  updatedAt    DateTime @default(dbgenerated("NOW()")) @map("updated_at")
+  createdAt    DateTime @default(dbgenerated("NOW()")) @map("created_at")
+
+  @@map("packages")
+}
+
+model Display {
+  id           Int      @default(autoincrement())
+  object_type  String   @unique
+  fields       Json
+  bcs          String
+  version      Int
+  lastTxDigist String?  @map("last_tx_digist") @db.VarChar(66)
+  updatedAt    DateTime @default(dbgenerated("NOW()")) @map("updated_at")
+  createdAt    DateTime @default(dbgenerated("NOW()")) @map("created_at")
+
+  @@map("displays")
+}
