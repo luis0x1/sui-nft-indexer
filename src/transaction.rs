@@ -49,10 +49,10 @@ pub struct SuiObject {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct TransactionDetail {
-  digest: TransactionDigest,
-  confirmed_timestamp: String,
-  status: SuiObjectStatus,
+pub struct TransactionDetail {
+  pub digest: TransactionDigest,
+  pub confirmed_timestamp: String,
+  pub status: SuiObjectStatus,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

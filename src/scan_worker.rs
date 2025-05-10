@@ -174,11 +174,8 @@ async fn process_checkpoint_clone(
   if object_len > 0 {
     let res = SaveObjectsJob::dispatch(
       &provider,
-      &MessageContent::SaveObjects(SaveObjectsJobPayload {
-        objects: transaction_objects
-          .iter()
-          .map(|object| serde_json::to_string(object).unwrap())
-          .collect(),
+      MessageContent::SaveObjects(SaveObjectsJobPayload {
+        objects: serde_json::to_string(&transaction_objects)?,
       })
     ).await;
 

@@ -59,11 +59,11 @@ pub trait BaseJob<T> {
   #[allow(unused)]
   async fn handle(provider: &AppProvider, job: T) -> Result<()>;
   #[allow(unused)]
-  async fn dispatch<V>(provider: &AppProvider, payload: &V) -> Result<()> where V: DeserializeOwned;
+  async fn dispatch(provider: &AppProvider, payload: MessageContent) -> Result<()>;
   async fn send(
     redis_connection: &mut MultiplexedConnection,
     http_client: Arc<HttpClient>,
-    payload: &String
+    payload: MessageContent
   ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
     let message = Message {
