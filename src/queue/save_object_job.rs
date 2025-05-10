@@ -8,7 +8,7 @@ use super::base_job::{ BaseJob, MessageContent };
 use anyhow::{ Error, Result };
 use async_trait::async_trait;
 use move_core_types::language_storage::StructTag;
-use serde::{ de::DeserializeOwned, Deserialize, Serialize };
+use serde::{ Deserialize, Serialize };
 use sui_sdk::json::MoveTypeLayout;
 use sui_types::{object::Data, TypeTag};
 
