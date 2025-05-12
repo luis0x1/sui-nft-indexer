@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use redis::{ aio::MultiplexedConnection, AsyncCommands, ToRedisArgs };
-use serde::{ de::DeserializeOwned, Deserialize, Serialize };
+use serde::{ Deserialize, Serialize };
 use uuid::Uuid;
 use reqwest::Client as HttpClient;
 use crate::{ env::get_env, scan_worker::AppProvider };

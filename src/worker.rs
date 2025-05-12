@@ -17,14 +17,14 @@ use crate::{
 pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
   let provider = Arc::new(AppProvider::init().await?);
   let start = Instant::now();
-  let all_task = Arc::new(RwLock::new(init_task(&provider.redis_client).await?));
+  let all_task = Arc::new(RwLock::new(init_task(&provider.worker_client).await?));
   let stop = Instant::now();
   println!("take tasks cost: {:?} with length: {:?}", stop - start, all_task.read().await.len());
 
   // Subscribe vào channel
   let task_subscriber = Arc::clone(&all_task);
   {
-    let client_clone = Arc::clone(&provider.redis_client);
+    let client_clone = Arc::clone(&provider.worker_client);
     tokio::spawn(async move {
       let processed = subscriber(&client_clone, &task_subscriber).await;
 
@@ -37,7 +37,7 @@ pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
   TokioScope::scope_and_block(|scope| {
     for _ in 0..concurrency {
       let all_task_clone = Arc::clone(&all_task);
-      let client_clone = Arc::clone(&provider.redis_client);
+      let client_clone = Arc::clone(&provider.worker_client);
       let provider_clone = Arc::clone(&provider);
 
       scope.spawn(async move {
@@ -48,6 +48,8 @@ pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
               if tasks_read.len() == 0 {
                 continue;
               }
+
+              drop(tasks_read);
 
               let mut tasks_locked = all_task_clone.write().await;
               let task_taked = tasks_locked.pop_front();
@@ -149,20 +151,21 @@ async fn on_message(
   Json(message): Json<PubSubMessage>
 ) -> Result<(), (StatusCode, String)> {
   let mut conn = state.redis_conn.write().await;
-  let task_res: Result<String, _> = (*conn).get(message.key.clone()).await;
+  let message_key = message.key;
+  let task_res: Result<String, _> = (*conn).get(&message_key).await;
   drop(conn);
-  println!("-> Received from api");
+  println!("-> Received from api {:?}", message_key);
 
   if let Ok(task) = task_res {
     let task_data: Result<Message, _> = serde_json::from_str(&task);
     if let Ok(message) = task_data {
-      println!("-> Received from api successfully");
+      println!("-> Received from api {:?} successfully", message_key);
       let mut app_task = state.all_task.write().await;
       app_task.push_back(message.into());
       drop(app_task);
     }
   } else {
-    eprintln!("Error key: {:?} -> {:?}", message.key, task_res.unwrap_err());
+    eprintln!("Error key: {:?} -> {:?}", message_key, task_res.unwrap_err());
     return Err((StatusCode::BAD_REQUEST, "Error".to_string()));
   }
 

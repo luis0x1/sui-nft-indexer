@@ -1,9 +1,14 @@
-use std::str::FromStr;
+use std::{ str::FromStr, sync::Arc };
 
 use anyhow::{ Error, Result };
 use redis::AsyncCommands;
 use sui_package_resolver::Package;
-use sui_sdk::rpc_types::{ SuiObjectDataOptions, SuiRawData };
+use sui_sdk::rpc_types::{
+  SuiObjectDataOptions,
+  SuiParsedData,
+  SuiRawData,
+  SuiTransactionBlockResponseOptions,
+};
 use sui_types::{ base_types::ObjectID, digests::TransactionDigest, move_package::MovePackage };
 
 use crate::scan_worker::AppProvider;
@@ -35,7 +40,7 @@ impl PackageResolver {
     }
 
     let package_raw_res = pg_client.query_one(
-      "SELECT serialized, version FROM packages WHERE id = $1",
+      "SELECT serialized, version FROM packages WHERE id = $1 OR virtual_id = $1 ORDER BY version DESC",
       &[&package_id]
     ).await;
 
@@ -64,10 +69,93 @@ impl PackageResolver {
     let sui_client = provider.sui_client();
 
     let package_id = ObjectID::from_str(package_id_raw)?;
+    let package_with_tx_opt = sui_client.open_client(|client| async move {
+      Ok(
+        client
+          .read_api()
+          .get_object_with_options(
+            package_id,
+            SuiObjectDataOptions::new().with_previous_transaction()
+          ).await?
+      )
+    }).await?;
+
+    let Some(package_with_tx) = package_with_tx_opt.data else {
+      return Err(Error::msg("PACKAGE_NOT_FOUND"));
+    };
+
+    let mut pkg_id = package_id;
+
+    if let Some(previous_tx) = package_with_tx.previous_transaction {
+      let latest_tx_res = sui_client.open_client(|client| async move {
+        Ok(
+          client
+            .read_api()
+            .get_transaction_with_options(
+              previous_tx,
+              SuiTransactionBlockResponseOptions::new().with_object_changes()
+            ).await?
+        )
+      }).await;
+
+      if let Ok(latest_tx) = latest_tx_res {
+        if let Some(object_changes) = latest_tx.object_changes {
+          let object_ids = &Arc::new(
+            object_changes
+              .iter()
+              .map(|obj| obj.object_id())
+              .collect::<Vec<ObjectID>>()
+          );
+
+          let objects_res = sui_client.open_client(|client| async move {
+            Ok(
+              client
+                .read_api()
+                .multi_get_object_with_options(
+                  object_ids.as_ref().to_vec(),
+                  SuiObjectDataOptions::new().with_content().with_type()
+                ).await?
+            )
+          }).await;
+
+          if let Ok(objects) = objects_res {
+            objects.iter().for_each(|object| {
+              if let Some(data) = &object.data {
+                if let Some(type_id) = data.type_.as_ref() {
+                  let type_id_str = type_id.to_string();
+
+                  if type_id_str.ends_with("2::package::UpgradeCap") {
+                    if let Some(content) = &data.content {
+                      if let SuiParsedData::MoveObject(object_data) = content {
+                        let new_pkg_id = object_data.fields.field_value("package");
+
+                        if new_pkg_id.is_some() {
+                          let new_object_id = ObjectID::from_str(&new_pkg_id.unwrap().to_string());
+
+                          if new_object_id.is_ok() {
+                            pkg_id = new_object_id.unwrap();
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            });
+          }
+        }
+      }
+    }
+
     let object_data = sui_client.open_client(|client| async move {
-      client
-        .read_api()
-        .get_object_with_options(package_id, SuiObjectDataOptions::new().with_bcs()).await
+      Ok(
+        client
+          .read_api()
+          .get_object_with_options(
+            pkg_id,
+            SuiObjectDataOptions::new().with_bcs().with_previous_transaction()
+          ).await?
+      )
     }).await?;
 
     let Some(package_data) = object_data.data else {
@@ -82,7 +170,12 @@ impl PackageResolver {
       return Err(Error::msg("OBJECT_IS_NOT_PACKAGE"));
     };
     let move_package = package_content.to_move_package(u64::MAX)?;
-    Self::save_package(provider, &move_package, package_data.previous_transaction).await?;
+    Self::save_package(
+      provider,
+      &move_package,
+      Some(package_id),
+      package_data.previous_transaction
+    ).await?;
     let package = Package::read_from_package(&move_package)?;
 
     return Ok((package, move_package.version().value()));
@@ -91,6 +184,7 @@ impl PackageResolver {
   pub async fn save_package(
     provider: &AppProvider,
     package: &MovePackage,
+    virtual_id: Option<ObjectID>,
     previous_transaction: Option<TransactionDigest>
   ) -> Result<()> {
     let pg_client = provider.pg_client();
@@ -105,10 +199,13 @@ impl PackageResolver {
 
     let package_id = package.id().to_string();
     pg_client.query(
-      "INSERT INTO packages(id, serialized, version, last_tx_digist, updated_at, created_at)
-          VALUES ($1, $2, $3, $4, NOW(), NOW())",
+      "INSERT INTO packages(id, virtual_id, serialized, version, last_tx_digist, updated_at, created_at)
+          VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+      ON CONFLICT(id)
+      DO UPDATE SET serialized = $3, version = $4, last_tx_digist = $5",
       &[
         &package_id,
+        &virtual_id.unwrap_or(package.id()).to_string(),
         &package_raw,
         &(u64::from(package.version()) as i64),
         &(if tx == "" { Some(tx) } else { None }),
@@ -122,7 +219,7 @@ impl PackageResolver {
 
   pub async fn save_packages(
     provider: &AppProvider,
-    packages: Vec<(&MovePackage, &Option<TransactionDigest>)>
+    packages: Vec<(MovePackage, Option<TransactionDigest>)>
   ) -> Result<()> {
     let pg_client = provider.pg_client();
     let redis_client = provider.redis_client();
@@ -142,7 +239,8 @@ impl PackageResolver {
             format!("package_{}", package.id().to_string()),
             serializer.clone(),
             format!(
-              r#"('{}', '{}', '{}', {}, NOW(), NOW())"#,
+              r#"('{}', '{}', '{}', '{}', {}, NOW(), NOW())"#,
+              package.id(),
               package.id(),
               serializer,
               u64::from(package.version()) as i64,
@@ -154,7 +252,7 @@ impl PackageResolver {
 
       pg_client.query(
         &format!(
-          "INSERT INTO packages(id, serialized, version, last_tx_digist, updated_at, created_at)
+          "INSERT INTO packages(id, virtual_id, serialized, version, last_tx_digist, updated_at, created_at)
         VALUES {}
         ON CONFLICT (id)
         DO UPDATE 
@@ -182,7 +280,7 @@ impl PackageResolver {
 
   pub async fn save_displays(
     provider: &AppProvider,
-    displays: Vec<(&StoredDisplay, &Option<TransactionDigest>)>
+    displays: Vec<(StoredDisplay, Option<TransactionDigest>)>
   ) -> Result<()> {
     let pg_client = provider.pg_client();
     let redis_client = provider.redis_client();
