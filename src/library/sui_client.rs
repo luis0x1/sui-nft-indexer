@@ -1,17 +1,17 @@
-use std::future::Future;
+use std::{ future::Future, sync::Arc };
 
 use anyhow::Result;
-use sui_sdk::{ error::SuiRpcResult, SuiClient, SuiClientBuilder };
+use sui_sdk::{ SuiClient, SuiClientBuilder };
 
 pub struct SuiClientProvider {
-  clients: Vec<SuiClient>,
+  clients: Arc<Vec<SuiClient>>,
 }
 
 const CLIENT_URLS: [&'static str; 4] = [
   "https://wallet-rpc.mainnet.sui.io",
-  "https://mainnet.suiet.app",
   "https://internal.suivision.xyz/mainnet/api",
   "https://fullnode.mainnet.sui.io",
+  "https://mainnet.suiet.app",
 ];
 
 impl SuiClientProvider {
@@ -28,12 +28,12 @@ impl SuiClientProvider {
     println!("end init");
 
     Ok(Self {
-      clients,
+      clients: Arc::new(clients),
     })
   }
 
-  pub async fn open_client<T, R, S>(&self, callback: T) -> SuiRpcResult<S>
-    where T: Fn(SuiClient) -> R, R: Future<Output = SuiRpcResult<S>>
+  pub async fn open_client<T, R, S>(&self, callback: T) -> Result<S>
+    where T: Fn(SuiClient) -> R, R: Future<Output = Result<S>>
   {
     let mut index = 0;
     loop {
@@ -44,10 +44,56 @@ impl SuiClientProvider {
       let sui_client = self.clients[index].clone();
       let callback_res = callback(sui_client).await;
 
-      return match callback_res {
+      let value = match callback_res {
         Ok(res) => Ok(res),
-        Err(err) => Err(err),
+        Err(err) => {
+          if err.to_string().contains("Request rejected `429`") {
+            println!("call blockchain error try next rpc: {index} -> {:?}", err);
+            index += 1;
+            continue;
+          }
+
+          Err(err)
+        }
       };
+
+      return value;
+    }
+  }
+
+  pub async fn open_client_with_params<T, R, S, Params>(
+    &self,
+    callback: T,
+    params: Params
+  )
+    -> Result<S>
+    where T: Fn(SuiClient, Arc<Params>) -> R, R: Future<Output = Result<S>>
+  {
+    let mut index = 0;
+    let p = Arc::new(params);
+    loop {
+      println!("index -> {:?}", index);
+      if index >= self.clients.len() {
+        index = 0;
+      }
+
+      let sui_client = self.clients[index].clone();
+      let callback_res = callback(sui_client, p.clone()).await;
+
+      let value = match callback_res {
+        Ok(res) => Ok(res),
+        Err(err) => {
+          if err.to_string().contains("Request rejected `429`") {
+            println!("call blockchain error try next rpc: {index} -> {:?}", err);
+            index += 1;
+            continue;
+          }
+
+          Err(err)
+        }
+      };
+
+      return value;
     }
   }
 }

@@ -51,12 +51,14 @@ model ObjectType {
 
 model Package {
   id           String   @id @db.VarChar(66)
+  virtual_id   String   @db.VarChar(66)
   serialized   String
   version      BigInt
   lastTxDigist String?  @map("last_tx_digist") @db.VarChar(66)
   updatedAt    DateTime @default(dbgenerated("NOW()")) @map("updated_at")
   createdAt    DateTime @default(dbgenerated("NOW()")) @map("created_at")
 
+  @@index([virtual_id, version(sort: Desc)])
   @@map("packages")
 }
 

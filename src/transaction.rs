@@ -11,7 +11,7 @@ use sui_types::{
   display::{ DISPLAY_MODULE_NAME, DISPLAY_VERSION_UPDATED_EVENT_NAME },
   full_checkpoint_content::CheckpointTransaction,
   move_package::MovePackage,
-  object::{ Data, Object, Owner },
+  object::{ Data, Object },
   SUI_FRAMEWORK_ADDRESS,
 };
 
@@ -38,14 +38,14 @@ impl Display for SuiObjectStatus {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SuiObject {
-  id: String,
-  owner: String,
-  object_type: Option<String>,
-  status: SuiObjectStatus,
-  updated_at: String,
-  content_bytes: Vec<u8>,
-  content: Option<String>,
-  version: String,
+  pub id: String,
+  pub owner: String,
+  pub object_type: Option<String>,
+  pub status: SuiObjectStatus,
+  pub updated_at: String,
+  pub content_bytes: Vec<u8>,
+  pub content: Option<String>,
+  pub version: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -57,9 +57,9 @@ pub struct TransactionDetail {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TransactionObject {
-  Struct(Object, Option<TransactionDetail>),
-  Package(MovePackage, Option<TransactionDetail>),
-  Display(StoredDisplay, Option<TransactionDetail>),
+  Struct(Object, TransactionDetail),
+  Package(MovePackage, TransactionDetail),
+  Display(StoredDisplay, TransactionDetail),
 }
 
 impl SuiObject {
@@ -168,10 +168,10 @@ async fn process_object(
 
   match object.data.clone() {
     Data::Move(_) => {
-      objects.push(TransactionObject::Struct(object.clone(), Some(transaction_detail)));
+      objects.push(TransactionObject::Struct(object.clone(), transaction_detail));
     }
     Data::Package(package_data) => {
-      objects.push(TransactionObject::Package(package_data, Some(transaction_detail)));
+      objects.push(TransactionObject::Package(package_data, transaction_detail));
     }
   }
 }
@@ -194,11 +194,11 @@ pub async fn get_all_object_checkpoint(
         .map(|display|
           TransactionObject::Display(
             display,
-            Some(TransactionDetail {
+            TransactionDetail {
               digest: transaction.transaction.digest().clone(),
               confirmed_timestamp: confirmed_timestamp.to_string(),
               status: SuiObjectStatus::Mutated,
-            })
+            }
           )
         )
         .collect();
@@ -238,16 +238,4 @@ pub async fn get_all_object_checkpoint(
   }
 
   objects
-}
-
-fn get_object_owner_address(object: &Object) -> String {
-  match object.owner() {
-    Owner::AddressOwner(addr) => addr.to_string(),
-    Owner::ObjectOwner(addr) => addr.to_string(),
-    Owner::Immutable => "Immutable".to_string(),
-    Owner::Shared { initial_shared_version } => format!("Shared({})", initial_shared_version),
-    Owner::ConsensusV2 { start_version: _, authenticator } => {
-      authenticator.as_single_owner().to_string()
-    }
-  }
 }

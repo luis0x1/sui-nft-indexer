@@ -27,6 +27,7 @@ pub struct AppProvider {
   pub pg_client: Arc<Client>,
   pub sui_client: Arc<SuiClientProvider>,
   pub redis_client: Arc<redis::Client>,
+  pub worker_client: Arc<redis::Client>,
   pub http_client: Arc<HttpClient>,
   pub state: Arc<Mutex<AppState>>,
 }
@@ -45,12 +46,14 @@ impl AppProvider {
       }
     });
 
-    let redis_client = redis::Client::open("redis://127.0.0.1/9")?;
+    let redis_client = redis::Client::open("redis://127.0.0.1/1")?;
+    let worker_client = redis::Client::open("redis://127.0.0.1/9")?;
 
     Ok(AppProvider {
       pg_client: Arc::new(client),
       sui_client: Arc::new(sui_client),
       redis_client: Arc::new(redis_client),
+      worker_client: Arc::new(worker_client),
       http_client: Arc::new(HttpClient::builder().build()?),
       state: Arc::new(Mutex::new(AppState { datatypes: BTreeMap::new() })),
     })

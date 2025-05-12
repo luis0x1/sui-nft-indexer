@@ -57,6 +57,7 @@ impl StructResolver {
         package.module(&key.module.to_string()).is_ok()
       );
     }
+
     let Ok(module) = package.module(&key.module.to_string()) else {
       return Err(
         Error::from_boxed(
@@ -66,7 +67,7 @@ impl StructResolver {
                 "cannot find module: {:?}::{:?}::{:?}",
                 &key.address.to_canonical_string(true),
                 &key.module.to_string(),
-                &key.name
+                &key.name.to_string()
               )
             )
           )
@@ -74,12 +75,12 @@ impl StructResolver {
       );
     };
 
-    let Ok(data_opt) = module.struct_def(&key.name.to_string()) else {
-      return Err(Error::msg("Cannot find struct"));
+    let Ok(data_opt) = module.data_def(key.name.as_str()) else {
+      return Err(Error::msg("Cannot find struct(85)"));
     };
 
     let Some(data) = data_opt else {
-      return Err(Error::msg("Cannot find struct"));
+      return Err(Error::msg("Cannot find struct(89)"));
     };
 
     let value = DataDefWrapper::from(&data);
@@ -107,21 +108,20 @@ impl StructResolver {
 
     let seried_value = serde_json::to_string(&data_type)?;
 
-    let inserted_res = pg_client
-      .query_one(
-        r#"INSERT INTO object_types (id, fields, version, updated_at, created_at)
+    let inserted_res = pg_client.query_one(
+      r#"INSERT INTO object_types (id, fields, version, updated_at, created_at)
                 VALUES ($1, $2, $3, NOW(), NOW())
                 ON CONFLICT(id)
                 DO UPDATE SET fields = $2,
                               version = $3,
                               updated_at = NOW()
                   WHERE version < $3 RETURNING id"#,
-        &[&key, &seried_value, &(version as i64)]
-      ).await;
-    
+      &[&key, &seried_value, &(version as i64)]
+    ).await;
+
     let inserted = match inserted_res {
-        Ok(value) => value.len() > 0,
-        Err(_) => true
+      Ok(value) => value.len() > 0,
+      Err(_) => true,
     };
 
     if inserted {
