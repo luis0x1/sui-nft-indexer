@@ -98,8 +98,8 @@ pub struct IndexerWorker(AppProvider);
 // static mut LAST_CHECKED: u64 = 131459304;
 // static mut CURRENT_CHECKPOINT: u64 = 131459304;
 //PACKAGE_NFT
-static mut LAST_CHECKED: u64 = 135210072;
-static mut CURRENT_CHECKPOINT: u64 = 135210072;
+static mut LAST_CHECKED: u64 = 135210071;
+static mut CURRENT_CHECKPOINT: u64 = 135210071;
 // static mut LAST_CHECKED: u64 = 0;
 // static mut CURRENT_CHECKPOINT: u64 = 0;
 
