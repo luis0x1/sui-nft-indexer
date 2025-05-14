@@ -7,7 +7,7 @@ on:
     branches: [ "main", "dev" ]
 
 env:
-  IMAGE_CACHE_SOURCE: staging
+  IMAGE_CACHE_SOURCE: latest
   IMAGE_REGISTRY: dainqdev
   IMAGE_NAME: birds-indexer
   IMAGE_TAG: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'latest' }}
