@@ -1,4 +1,4 @@
-FROM rust:1.86-bullseye AS builder
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 RUN apt-get update
 
 # Get Ubuntu packages
@@ -8,23 +8,19 @@ RUN apt-get update && apt-get install -y cmake clang
 
 # Update new packages
 RUN apt-get update
-
-# Get Rust
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
-
-ENV PATH="/root/.cargo/bin:${PATH}"
-
 WORKDIR /app
-COPY Cargo.toml Cargo.lock .
-RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build --release
 
+
+FROM chef AS planner
 COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry <<EOF
-  set -e
-  cargo build --release
-EOF
+FROM chef AS builder 
+COPY --from=planner /app/recipe.json recipe.json
+
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
+RUN cargo build --release
 
 FROM debian:bullseye-slim AS runtime
 # Use jemalloc as memory allocator
