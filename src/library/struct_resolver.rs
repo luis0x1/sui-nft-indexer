@@ -26,7 +26,7 @@ impl StructResolver {
     let data_def_opt = provider.get_dataref(&key_str).await;
 
     if let Some(data_def) = data_def_opt {
-      return Ok(Arc::new(data_def.into()));
+      return Ok(Arc::new(data_def.as_ref().into()));
     }
 
     let (package, _) = match
