@@ -8,15 +8,13 @@ use tokio::{ sync::{ Mutex, MutexGuard }, task::JoinHandle };
 use tokio_postgres::{ Client, NoTls };
 use reqwest::Client as HttpClient;
 use crate::{
-  library::{
+  env::get_env, library::{
     object_wrapper::DataDefWrapper,
     sui_client::SuiClientProvider,
-  },
-  queue::{
+  }, queue::{
     base_job::{ BaseJob, MessageContent },
     save_object_job::{ SaveObjectsJob, SaveObjectsJobPayload },
-  },
-  transaction::get_all_object_checkpoint, utils::btree_map::BTreeMapLimit,
+  }, transaction::get_all_object_checkpoint, utils::btree_map::BTreeMapLimit
 };
 
 pub struct AppState {
@@ -34,9 +32,10 @@ pub struct AppProvider {
 
 impl AppProvider {
   pub async fn init() -> Result<Self> {
+    let env_var = get_env();
     let sui_client = SuiClientProvider::init().await?;
     let (client, connection) = tokio_postgres::connect(
-      "postgresql://postgres:dai@localhost:5432/mydb",
+      &env_var.postgres_url,
       NoTls
     ).await?;
 
@@ -46,8 +45,8 @@ impl AppProvider {
       }
     });
 
-    let redis_client = redis::Client::open("redis://127.0.0.1/1")?;
-    let worker_client = redis::Client::open("redis://127.0.0.1/9")?;
+    let redis_client = redis::Client::open(format!("{}/1", env_var.redis_url))?;
+    let worker_client = redis::Client::open(format!("{}/9", env_var.redis_url))?;
 
     Ok(AppProvider {
       pg_client: Arc::new(client),

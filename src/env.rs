@@ -7,6 +7,8 @@ pub struct EnvValue {
   pub worm_nft_type: String,
   pub app_type: AppType,
   pub channel_id: String,
+  pub postgres_url: String,
+  pub redis_url: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,6 +36,8 @@ static ENV: LazyLock<Arc<Mutex<EnvValue>>> = LazyLock::new(|| {
       worm_nft_type: "".to_string(),
       app_type: AppType::Scan,
       channel_id: "".to_string(),
+      redis_url: "".to_string(),
+      postgres_url: "".to_string(),
     })
   )
 });
@@ -49,4 +53,6 @@ pub fn init_env() {
   env.worm_nft_type = std::env::var("WORM_NFT_TYPE").unwrap_or("default".to_string());
   env.app_type = std::env::var("APP_TYPE").unwrap_or("1".to_string()).into();
   env.channel_id = std::env::var("CHANNEL_ID").unwrap_or("channel_id".to_string());
+  env.channel_id = std::env::var("DATABASE_URL").unwrap_or("".to_string());
+  env.channel_id = std::env::var("REDIS_URL").unwrap_or("".to_string());
 }
