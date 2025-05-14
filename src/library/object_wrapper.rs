@@ -239,6 +239,20 @@ impl From<DataDefWrapper> for DataDef {
   }
 }
 
+impl From<&DataDefWrapper> for DataDef {
+  fn from(value: &DataDefWrapper) -> Self {
+    DataDef {
+      abilities: value.abilities,
+      data: value.data.clone().into(),
+      defining_id: value.defining_id,
+      type_params: value.type_params
+        .iter()
+        .map(|v| v.clone().into())
+        .collect(),
+    }
+  }
+}
+
 impl From<DataDef> for DataDefWrapper {
   fn from(value: DataDef) -> Self {
     Self {

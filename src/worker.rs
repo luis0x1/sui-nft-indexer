@@ -154,20 +154,21 @@ async fn on_message(
   let message_key = message.key;
   let task_res: Result<String, _> = (*conn).get(&message_key).await;
   drop(conn);
-  println!("-> Received from api {:?}", message_key);
+  tokio::spawn(async move {
+    println!("-> Received from api {:?}", message_key);
 
-  if let Ok(task) = task_res {
-    let task_data: Result<Message, _> = serde_json::from_str(&task);
-    if let Ok(message) = task_data {
-      println!("-> Received from api {:?} successfully", message_key);
-      let mut app_task = state.all_task.write().await;
-      app_task.push_back(message.into());
-      drop(app_task);
+    if let Ok(task) = task_res {
+      let task_data: Result<Message, _> = serde_json::from_str(&task);
+      if let Ok(message) = task_data {
+        println!("-> Received from api {:?} successfully", message_key);
+        let mut app_task = state.all_task.write().await;
+        app_task.push_back(message.into());
+        drop(app_task);
+      }
+    } else {
+      eprintln!("Error key: {:?} -> {:?}", message_key, task_res.unwrap_err());
     }
-  } else {
-    eprintln!("Error key: {:?} -> {:?}", message_key, task_res.unwrap_err());
-    return Err((StatusCode::BAD_REQUEST, "Error".to_string()));
-  }
+  });
 
   Ok(())
 }

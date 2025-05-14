@@ -118,48 +118,6 @@ async fn process_object(
     return; // Object already processed
   }
 
-  if object_id == "0x8fd6526ba0fdfc85f94b0027ca2a00d942f91d194fe7261aab233b994cfbd5e2" {
-    if let Data::Move(move_object) = object.data.clone() {
-      println!("CONTENTS: {:?}", move_object.contents());
-    }
-  }
-
-  if object_id == "0xdb5069875ed5eab109b16b20c599b1a8293fd6f3be4d9e9fdf59394a076c7a16" {
-    if let Data::Move(move_object) = object.data.clone() {
-      println!("NFT CONTENTS: {:?}", move_object.contents());
-    }
-    let tag = object.type_().unwrap();
-    println!(
-      "QUERY: {:?} {:?} {:?} {:?}",
-      SUI_FRAMEWORK_ADDRESS,
-      DISPLAY_VERSION_UPDATED_EVENT_NAME,
-      DISPLAY_MODULE_NAME,
-      tag.clone().type_params()
-    );
-  }
-
-  if object_id == "0xbe1ca29fd5c79b061a387aa0cfffa7905722ac0e9895946dd5e20c0fad48ba8b" {
-    if let Data::Package(package) = object.data.clone() {
-      // println!("CONTRACT: {:?}", serde_json::to_string(&bird_package));
-      let package_ = Package::read_from_package(&package);
-
-      if let Ok(package) = package_ {
-        if let Ok(module) = package.module("birds_nft") {
-          println!("module: {:?}", module);
-          // if let Ok(struct__) = module.struct_def("Config") {
-          //   if let Some(struct_) = struct__ {
-          //     if let MoveData::Struct(data) = struct_.data {
-          //       for (name_field, type_) in data {
-          //         println!("UserArchive -> {:?}: {:?}", name_field, type_);
-          //       }
-          //     }
-          //   }
-          // }
-        }
-      }
-    }
-  }
-
   let transaction_detail = TransactionDetail {
     digest: object.previous_transaction,
     confirmed_timestamp: confirmed_timestamp.to_string(),

@@ -1,4 +1,4 @@
-use std::{ collections::BTreeMap, sync::Arc, thread, time::{ Duration, SystemTime } };
+use std::{ sync::Arc, thread, time::{ Duration, SystemTime } };
 
 use anyhow::{ Ok, Result };
 use async_trait::async_trait;
@@ -16,11 +16,11 @@ use crate::{
     base_job::{ BaseJob, MessageContent },
     save_object_job::{ SaveObjectsJob, SaveObjectsJobPayload },
   },
-  transaction::get_all_object_checkpoint,
+  transaction::get_all_object_checkpoint, utils::btree_map::BTreeMapLimit,
 };
 
 pub struct AppState {
-  pub datatypes: BTreeMap<String, DataDefWrapper>,
+  pub datatypes: BTreeMapLimit<String, Arc<DataDefWrapper>>,
 }
 
 pub struct AppProvider {
@@ -55,7 +55,7 @@ impl AppProvider {
       redis_client: Arc::new(redis_client),
       worker_client: Arc::new(worker_client),
       http_client: Arc::new(HttpClient::builder().build()?),
-      state: Arc::new(Mutex::new(AppState { datatypes: BTreeMap::new() })),
+      state: Arc::new(Mutex::new(AppState { datatypes: BTreeMapLimit::new(1000_000) })),
     })
   }
 
@@ -71,20 +71,16 @@ impl AppProvider {
     &self.redis_client
   }
 
-  pub async fn get_dataref(&self, key: &str) -> Option<DataDefWrapper> {
+  pub async fn get_dataref(&self, key: &str) -> Option<Arc<DataDefWrapper>> {
     let datatypes = MutexGuard::map(self.state.lock().await, |state| &mut state.datatypes);
 
-    if datatypes.contains_key(key) {
-      return Some(datatypes[key].clone());
-    }
-
-    None
+    datatypes.get(key).map(|d| d.clone())
   }
 
   pub async fn set_dataref(&self, key: &str, value: DataDefWrapper) -> Result<()> {
     let mut datatypes = MutexGuard::map(self.state.lock().await, |state| &mut state.datatypes);
 
-    (*datatypes).insert(key.to_string(), value);
+    (*datatypes).insert(key.to_string(), Arc::new(value));
 
     Ok(())
   }
@@ -102,8 +98,8 @@ pub struct IndexerWorker(AppProvider);
 // static mut LAST_CHECKED: u64 = 131459304;
 // static mut CURRENT_CHECKPOINT: u64 = 131459304;
 //PACKAGE_NFT
-static mut LAST_CHECKED: u64 = 135210073;
-static mut CURRENT_CHECKPOINT: u64 = 135210073;
+static mut LAST_CHECKED: u64 = 135210072;
+static mut CURRENT_CHECKPOINT: u64 = 135210072;
 // static mut LAST_CHECKED: u64 = 0;
 // static mut CURRENT_CHECKPOINT: u64 = 0;
 
