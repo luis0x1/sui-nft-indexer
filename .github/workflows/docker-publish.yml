@@ -8,7 +8,7 @@ on:
 
 env:
   IMAGE_CACHE_SOURCE: staging
-  IMAGE_REGISTRY: anhskohbo
+  IMAGE_REGISTRY: dainqdev
   IMAGE_NAME: birds-indexer
   IMAGE_TAG: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'latest' }}
 
@@ -31,7 +31,7 @@ jobs:
       - name: Log into registry
         uses: docker/login-action@v3
         with:
-          username: anhskohbo
+          username: dainqdev
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Build and push Docker image with Buildx
