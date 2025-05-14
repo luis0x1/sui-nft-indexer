@@ -4,15 +4,12 @@ use crate::{
   scan_worker::AppProvider,
 };
 use serde::{ Deserialize, Serialize };
-use sui_package_resolver::Package;
 use std::{collections::HashSet, fmt::Display};
 use sui_types::{
   digests::TransactionDigest,
-  display::{ DISPLAY_MODULE_NAME, DISPLAY_VERSION_UPDATED_EVENT_NAME },
   full_checkpoint_content::CheckpointTransaction,
   move_package::MovePackage,
   object::{ Data, Object },
-  SUI_FRAMEWORK_ADDRESS,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

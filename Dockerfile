@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y libjemalloc-dev ca-certificates curl
 ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libjemalloc.so"
 WORKDIR /app
 
-COPY --from=builder /app/target/release/indexer_v2 /usr/local/bin
+COPY --from=builder /app/target/release/birds-indexer /usr/local/bin
 RUN apt update && apt install -y libpq5 ca-certificates libpq-dev
 
 # Don't run production as root
@@ -44,4 +44,4 @@ COPY --from=builder /app .
 
 EXPOSE 2811 2811
 
-CMD ["indexer_v2"]
+CMD ["birds-indexer"]
