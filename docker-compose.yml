@@ -1,0 +1,72 @@
+version: '3.9'
+
+services:
+  indexer:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      APP_TYPE: 1
+      WORKER_URL: http://worker:2811/message
+    depends_on:
+      - db
+      - redis
+      - worker
+    networks:
+      - worm_network
+
+  worker:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      APP_TYPE: 2
+      WORKER_URL: 0.0.0.0:2811
+    ports:
+      - '2811:2811'
+    depends_on:
+      - db
+      - redis
+    networks:
+      - worm_network
+
+  db:
+    image: postgres:latest
+    restart: unless-stopped
+    shm_size: 128mb
+    environment:
+      POSTGRES_DB: mydb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dai
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - worm_network
+
+  redis:
+    image: redis:latest
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - worm_network
+
+networks:
+  worm_network:
+    driver: bridge

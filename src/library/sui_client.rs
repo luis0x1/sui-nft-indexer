@@ -1,4 +1,4 @@
-use std::{ future::Future, sync::Arc };
+use std::{ future::Future, sync::Arc, thread, time::Duration };
 
 use anyhow::Result;
 use sui_sdk::{ SuiClient, SuiClientBuilder };
@@ -9,8 +9,8 @@ pub struct SuiClientProvider {
 
 const CLIENT_URLS: [&'static str; 4] = [
   "https://wallet-rpc.mainnet.sui.io",
-  "https://internal.suivision.xyz/mainnet/api",
   "https://fullnode.mainnet.sui.io",
+  "https://internal.suivision.xyz/mainnet/api",
   "https://mainnet.suiet.app",
 ];
 
@@ -47,9 +47,14 @@ impl SuiClientProvider {
       let value = match callback_res {
         Ok(res) => Ok(res),
         Err(err) => {
-          if err.to_string().contains("Request rejected `429`") {
+          let error_str = err.to_string();
+          if
+            error_str.contains("Request rejected `429`") ||
+            error_str.contains("Can't assign requested address (os error 49)")
+          {
             println!("call blockchain error try next rpc: {index} -> {:?}", err);
             index += 1;
+            thread::sleep(Duration::from_secs(index as u64));
             continue;
           }
 

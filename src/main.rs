@@ -23,12 +23,12 @@ pub mod worker;
 async fn main() -> Result<()> {
   init_env();
   println!("ENV: {:?}", get_env());
-
+  let env_var = get_env();
   // The connection object performs the actual communication with the database,
   // so spawn it off to run on its own.
   // println!("tempfile::tempdir()?.into_path(): {:?}", tempfile::tempdir()?.into_path());
 
-  match get_env().app_type {
+  match env_var.app_type {
     AppType::Scan => {
       let (worker, initital_checkpoint, performance_task) = IndexerWorker::init().await?;
       println!("init done");
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
         worker,
         "https://checkpoints.mainnet.sui.io".to_string(),
         initital_checkpoint /* initial checkpoint number */,
-        4 /* concurrency */,
+        env_var.concurrency /* concurrency */,
         None /* extra reader options */
       ).await?;
 
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
       performance_task.abort();
     }
     AppType::Worker => {
-      setup_worker_flow(5).await?;
+      setup_worker_flow(env_var.concurrency as u8).await?;
     }
     AppType::Test => {
       let client = Arc::new(reqwest::Client::new());
@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
             let client_clone = client.clone();
 
             tokio::spawn(async move { client_clone
-                .post("http://127.0.0.1:2811/message")
+                .post("http://0.0.0.0:2811/message")
                 .json(
                   &(PubSubMessage {
                     id: Uuid::new_v4().to_string(),

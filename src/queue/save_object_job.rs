@@ -1,13 +1,23 @@
-use std::{ str::FromStr, sync::Arc };
+use std::{ collections::VecDeque, str::FromStr, sync::Arc };
 
 use crate::{
-  library::{ display::StoredDisplay, package_resolve::PackageResolver, struct_resolver::StructResolver },
+  library::{
+    display::StoredDisplay,
+    package_resolve::PackageResolver,
+    struct_resolver::StructResolver,
+  },
   scan_worker::AppProvider,
   transaction::{ SuiObject, TransactionObject },
-  utils::object::{ get_object_content_bytes, insert_objects, is_valid_object },
+  utils::{
+    error::OBJECT_NOT_FOUND_LOCAL,
+    object::{ get_object_content_bytes, insert_objects, is_valid_object },
+  },
 };
 
-use super::base_job::{ BaseJob, MessageContent };
+use super::{
+  base_job::{ BaseJob, MessageContent, Task },
+  parse_object_fields_job::{ ParseObjectsFieldsJob, ParseObjectsFieldsJobPayload },
+};
 use anyhow::{ Error, Result };
 use async_trait::async_trait;
 use move_core_types::language_storage::StructTag;
@@ -19,6 +29,7 @@ use sui_types::{
   object::{ Data, Object, Owner },
   TypeTag,
 };
+use tokio::sync::RwLock;
 
 pub struct SaveObjectsJob;
 
@@ -30,11 +41,26 @@ pub struct SaveObjectsJobPayload {
 #[async_trait]
 impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
   async fn handle(provider: &AppProvider, job: SaveObjectsJobPayload) -> anyhow::Result<()> {
-    println!("doing job");
     let tx_objects: Vec<TransactionObject> = serde_json::from_str(&job.objects)?;
     let mut objects = Vec::<SuiObject>::new();
+    let mut objects_failed = Vec::<Object>::new();
     let mut packages = Vec::<(MovePackage, Option<TransactionDigest>)>::new();
     let mut displays = Vec::<(StoredDisplay, Option<TransactionDigest>)>::new();
+
+    tx_objects.iter().for_each(|tx_object| {
+      match tx_object {
+        TransactionObject::Package(package, detail) => {
+          packages.push((package.clone(), Some(detail.digest)));
+        }
+        TransactionObject::Display(display, detail) => {
+          displays.push((display.clone(), Some(detail.digest)));
+        }
+        _ => {}
+      }
+    });
+
+    PackageResolver::save_packages(provider, packages).await?;
+    PackageResolver::save_displays(provider, displays).await?;
 
     for tx_object in tx_objects {
       match tx_object {
@@ -50,39 +76,53 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
             let move_struct_type = &move_object.type_().to_string();
             let struct_tag_res: Result<StructTag, _> = StructTag::from_str(&move_struct_type);
             let mut content = None;
+            let mut display = None;
+            let content_bytes = get_object_content_bytes(&object.data);
+
             if let Ok(struct_tag) = struct_tag_res {
               let res = StructResolver::resolve_type_layout(
                 provider,
                 &TypeTag::Struct(Box::new(struct_tag)),
+                true,
                 20
               ).await;
 
-              match res {
-                Ok(data) => {
-                  match data.0 {
-                    MoveTypeLayout::Struct(layout) => {
-                      let data = object.data.try_as_move().unwrap().to_move_struct(layout.as_ref());
-                      match data {
-                        Ok(d) => {
-                          content = Some(serde_json::to_string(&d).unwrap());
-                        }
-                        _ => {}
+              if let Ok(data) = res {
+                if let MoveTypeLayout::Struct(layout) = data.0 {
+                  let data = object.data.try_as_move().unwrap().to_move_struct(layout.as_ref());
+                  match data {
+                    Ok(d) => {
+                      content = Some(serde_json::to_string(&d).unwrap());
+
+                      if
+                        let Ok(display_template) = PackageResolver::get_display(
+                          provider,
+                          &move_struct_type,
+                          &d
+                        ).await
+                      {
+                        display = Some(display_template);
                       }
                     }
                     _ => {}
-                  };
+                  }
                 }
-                Err(e) => {
+              } else {
+                let error = res.unwrap_err();
+
+                if error.to_string().contains(OBJECT_NOT_FOUND_LOCAL) {
+                  objects_failed.push(object.clone());
+                  println!("[SaveObjectsJob]: add object to [ParseObjectsFieldsJob]")
+                } else {
                   eprintln!(
-                    "error ================> {:?} -> {:?} -> {:?}",
+                    "[SaveObjectsJob]: error ================> {:?} -> {:?} -> {:?}",
                     object.id(),
                     object.type_().map(|t| t.to_string()),
-                    e
+                    error
                   );
                 }
               }
             }
-            let content_bytes = get_object_content_bytes(&object.data);
 
             objects.push(SuiObject {
               id: object.id().to_string(),
@@ -92,22 +132,24 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
               updated_at: detail.confirmed_timestamp,
               content_bytes,
               content,
+              display,
               version: object.version().to_string(),
             });
           }
         }
-        TransactionObject::Package(package, detail) => {
-          packages.push((package, Some(detail.digest)));
-        }
-        TransactionObject::Display(display, detail) => {
-          displays.push((display, Some(detail.digest)));
-        }
+        _ => {}
       }
     }
 
     insert_objects(provider, objects).await?;
-    PackageResolver::save_packages(provider, packages).await?;
-    PackageResolver::save_displays(provider, displays).await?;
+    if objects_failed.len() > 0 {
+      ParseObjectsFieldsJob::dispatch(
+        provider,
+        MessageContent::ParseObjectsFields(ParseObjectsFieldsJobPayload {
+          objects: serde_json::to_string(&objects_failed)?,
+        })
+      ).await?;
+    }
 
     Ok(())
   }
@@ -120,7 +162,26 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
         SaveObjectsJob::send(&mut connection, client, payload).await?;
       }
       _ => {
-        return Err(Error::msg("Invalid SaveObjectJob payload"));
+        return Err(Error::msg("[SaveObjectJob]: Invalid payload"));
+      }
+    }
+
+    Ok(())
+  }
+
+  async fn dispatch_current(
+    provider: &AppProvider,
+    all_tasks: Arc<RwLock<VecDeque<Task>>>,
+    payload: MessageContent
+  ) -> Result<()> {
+    let mut connection = provider.worker_client.get_multiplexed_tokio_connection().await?;
+
+    match payload {
+      MessageContent::SaveObjects(_) => {
+        SaveObjectsJob::send_current(&mut connection, all_tasks, payload).await?;
+      }
+      _ => {
+        return Err(Error::msg("[SaveObjectJob]: Invalid payload"));
       }
     }
 

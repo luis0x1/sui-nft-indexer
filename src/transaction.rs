@@ -4,7 +4,7 @@ use crate::{
   scan_worker::AppProvider,
 };
 use serde::{ Deserialize, Serialize };
-use std::{collections::HashSet, fmt::Display};
+use std::{ collections::HashSet, fmt::Display };
 use sui_types::{
   digests::TransactionDigest,
   full_checkpoint_content::CheckpointTransaction,
@@ -42,6 +42,7 @@ pub struct SuiObject {
   pub updated_at: String,
   pub content_bytes: Vec<u8>,
   pub content: Option<String>,
+  pub display: Option<String>,
   pub version: String,
 }
 
@@ -82,6 +83,10 @@ impl SuiObject {
 
   pub fn content(&self) -> &Option<String> {
     &self.content
+  }
+
+  pub fn display(&self) -> &Option<String> {
+    &self.display
   }
 
   pub fn content_bytes(&self) -> &Vec<u8> {
@@ -147,14 +152,11 @@ pub async fn get_all_object_checkpoint(
         .iter()
         .flat_map(StoredDisplay::try_from_event)
         .map(|display|
-          TransactionObject::Display(
-            display,
-            TransactionDetail {
-              digest: transaction.transaction.digest().clone(),
-              confirmed_timestamp: confirmed_timestamp.to_string(),
-              status: SuiObjectStatus::Mutated,
-            }
-          )
+          TransactionObject::Display(display, TransactionDetail {
+            digest: transaction.transaction.digest().clone(),
+            confirmed_timestamp: confirmed_timestamp.to_string(),
+            status: SuiObjectStatus::Mutated,
+          })
         )
         .collect();
 

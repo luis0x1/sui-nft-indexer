@@ -16,7 +16,11 @@ use super::{ object_wrapper::DataDefWrapper, package_resolve::PackageResolver };
 pub struct StructResolver {}
 
 impl StructResolver {
-  async fn get_datatype(provider: &AppProvider, key: &StructTag) -> Result<Arc<DataDef>> {
+  async fn get_datatype(
+    provider: &AppProvider,
+    key: &StructTag,
+    only_local: bool
+  ) -> Result<Arc<DataDef>> {
     let key_str = format!(
       "{}::{}::{}",
       key.address.to_canonical_string(true),
@@ -30,7 +34,7 @@ impl StructResolver {
     }
 
     let (package, _) = match
-      PackageResolver::get_package(provider, &key.address.to_canonical_string(true)).await
+      PackageResolver::get_package(provider, &key.address.to_canonical_string(true), only_local).await
     {
       Ok(value) => value,
       Err(e) => {
@@ -39,24 +43,6 @@ impl StructResolver {
         );
       }
     };
-
-    if
-      key.address.to_canonical_string(true) ==
-      "0x4979543452f609ff272d504755966ff5e70122256101c17adbe8bd27d35116c3"
-    {
-      let modules = package
-        .modules()
-        .iter()
-        .map(|m| m.0.clone())
-        .collect::<Vec<String>>();
-
-      println!(
-        "package: {:?} + {:?} -> {:?}",
-        modules,
-        key.module.to_string(),
-        package.module(&key.module.to_string()).is_ok()
-      );
-    }
 
     let Ok(module) = package.module(&key.module.to_string()) else {
       return Err(
@@ -134,6 +120,7 @@ impl StructResolver {
   pub async fn resolve_type_layout(
     provider: &AppProvider,
     tag: &TypeTag,
+    only_local: bool,
     max_depth: usize
   ) -> Result<(MoveTypeLayout, usize)> {
     use MoveTypeLayout as L;
@@ -159,7 +146,7 @@ impl StructResolver {
 
       T::Vector(tag) => {
         let (layout, depth) = Box::pin(
-          StructResolver::resolve_type_layout(provider, tag, max_depth - 1)
+          StructResolver::resolve_type_layout(provider, tag, only_local, max_depth - 1)
         ).await?;
         (L::Vector(Box::new(layout)), depth + 1)
       }
@@ -169,7 +156,7 @@ impl StructResolver {
 
         for tag in s.type_params.clone() {
           let tag_layout = Box::pin(
-            StructResolver::resolve_type_layout(provider, &tag, max_depth - 1)
+            StructResolver::resolve_type_layout(provider, &tag, only_local, max_depth - 1)
           ).await?;
           param_layouts.push(tag_layout);
         }
@@ -183,7 +170,7 @@ impl StructResolver {
         // SAFETY: `add_type_tag` ensures `datatyps` has an element with this key.
         let key = s.as_ref();
 
-        let def = match StructResolver::get_datatype(provider, key).await {
+        let def = match StructResolver::get_datatype(provider, key, only_local).await {
           Err(e) => {
             let message = &format!("CANNOT FIND DATADEF: {:?}", e);
             return Err(Error::from_boxed(Box::new(AppError::new(&message))));
@@ -204,6 +191,7 @@ impl StructResolver {
             &def,
             type_,
             param_layouts,
+            only_local,
             max_depth
           )
         ).await?
@@ -216,6 +204,7 @@ impl StructResolver {
     data_def: &Arc<DataDef>,
     type_: StructTag,
     param_layouts: Vec<(MoveTypeLayout, usize)>,
+    only_local: bool,
     max_depth: usize
   ) -> Result<(MoveTypeLayout, usize)> {
     Ok(match &data_def.data {
@@ -228,6 +217,7 @@ impl StructResolver {
             provider,
             sig,
             &param_layouts,
+            only_local,
             max_depth - 1
           ).await?;
 
@@ -260,6 +250,7 @@ impl StructResolver {
               provider,
               sig,
               &param_layouts,
+              only_local,
               max_depth - 1
             ).await?;
 
@@ -293,6 +284,7 @@ impl StructResolver {
     provider: &AppProvider,
     sig: &OpenSignatureBody,
     param_layouts: &[(MoveTypeLayout, usize)],
+    only_local: bool,
     max_depth: usize
   ) -> Result<(MoveTypeLayout, usize)> {
     use MoveTypeLayout as L;
@@ -334,6 +326,7 @@ impl StructResolver {
             provider,
             sig.as_ref(),
             param_layouts,
+            only_local,
             max_depth - 1
           )
         ).await?;
@@ -351,7 +344,8 @@ impl StructResolver {
               module: Identifier::from_str(&key.module.to_string()).unwrap(),
               name: Identifier::from_str(&key.name.to_string()).unwrap(),
               type_params: vec![],
-            })
+            }),
+            only_local
           ).await
         {
           Err(e) => {
@@ -366,7 +360,13 @@ impl StructResolver {
         for sig in params {
           p_layouts.push(
             Box::pin(
-              StructResolver::resolve_signature_layout(provider, sig, param_layouts, max_depth - 1)
+              StructResolver::resolve_signature_layout(
+                provider,
+                sig,
+                param_layouts,
+                only_local,
+                max_depth - 1
+              )
             ).await?
           );
         }
@@ -387,7 +387,7 @@ impl StructResolver {
         };
 
         Box::pin(
-          StructResolver::resolve_datatype_signature(provider, &def, type_, p_layouts, max_depth)
+          StructResolver::resolve_datatype_signature(provider, &def, type_, p_layouts, only_local, max_depth)
         ).await?
       }
     })

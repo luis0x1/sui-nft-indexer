@@ -64,6 +64,14 @@ fn parse_object_content_to_sql(object: &SuiObject) -> String {
   }
 }
 
+fn parse_object_display_to_sql(object: &SuiObject) -> String {
+  let default_value = "{}".to_string();
+  match object.display() {
+    Some(v) => serde_json::to_string(&v).unwrap_or(default_value),
+    None => default_value,
+  }
+}
+
 fn parse_vector_to_sql(data: &Vec<u8>) -> String {
   format!("{:?}", data)
 }
@@ -82,13 +90,14 @@ pub async fn insert_objects(
       .iter()
       .map(|object| {
         format!(
-          r#"('{}', '{}', {}, '{}'::"ObjectStatus", '{}', '{}'::jsonb, '{}'::bigint, '{}'::timestamp, '{}'::timestamp)"#,
+          r#"('{}', '{}', {}, '{}'::"ObjectStatus", '{}', '{}'::jsonb, '{}'::jsonb, '{}'::bigint, '{}'::timestamp, '{}'::timestamp)"#,
           object.id(),
           object.owner(),
           parse_object_type_to_sql(object),
           object.status().to_string(),
           parse_vector_to_sql(object.content_bytes()),
           parse_object_content_to_sql(object),
+          parse_object_display_to_sql(object),
           object.version(),
           object.updated_at(),
           object.updated_at()
@@ -99,20 +108,85 @@ pub async fn insert_objects(
 
     let query =
       format!(r#"
-      INSERT INTO objects (id, owner, type, status, field_raw, fields, version, updated_at, created_at)
+      INSERT INTO objects (id, owner, type, status, field_raw, fields, display, version, updated_at, created_at)
       VALUES {}
       ON CONFLICT (id)
       DO UPDATE
       SET owner = EXCLUDED.owner,
           status = EXCLUDED.status,
           field_raw = EXCLUDED.field_raw,
-          fields = EXCLUDED.fields,
+          fields = CASE WHEN EXCLUDED.fields <> '{}'::jsonb THEN EXCLUDED.fields ELSE objects.fields END,
+          display = CASE WHEN EXCLUDED.display <> '{}'::jsonb THEN EXCLUDED.display ELSE objects.display END,
           version = EXCLUDED.version,
           updated_at = EXCLUDED.updated_at
       WHERE objects.updated_at < EXCLUDED.updated_at
-      "#, values);
+      "#, values, "{}", "{}");
 
     let res = pg_client.query(query.as_str(), &[]).await;
+    unwrap(res)?;
+  }
+
+  Ok(())
+}
+
+pub struct UpdateObjectArgs {
+  pub id: String,
+  pub version: u64,
+  pub fields: String,
+  pub display: String,
+}
+
+pub async fn update_object_fields(
+  provider: &AppProvider,
+  args: UpdateObjectArgs
+) -> Result<(), AppError> {
+  let pg_client = &provider.pg_client;
+  let query =
+    r#"UPDATE objects
+      SET fields = $3::jsonb,
+          display = $4::jsonb
+      WHERE id = $1 AND version = $2"#;
+
+  let res = pg_client.query(
+    query,
+    &[&args.id, &(args.version as i64), &args.fields, &args.display]
+  ).await;
+
+  unwrap(res)?;
+
+  Ok(())
+}
+
+pub async fn update_objects_fields(
+  provider: &AppProvider,
+  args: Vec<UpdateObjectArgs>
+) -> Result<(), AppError> {
+  const BATCH_SIZE: usize = 1000;
+  let pg_client = &provider.pg_client;
+
+  for chunk in args.chunks(BATCH_SIZE) {
+    let values = chunk
+      .iter()
+      .map(|object| {
+        format!(
+          r#"('{}', '{}'::bigint, '{}'::jsonb, '{}'::jsonb)"#,
+          object.id,
+          object.version,
+          object.fields,
+          object.display
+        )
+      })
+      .collect::<Vec<String>>()
+      .join(",");
+
+    let query = format!(r#"UPDATE objects
+          SET fields = v.fields,
+              display = v.display
+          FROM (VALUES {}) v(id, version, fields, display)
+          WHERE objects.id = v.id AND objects.version = v.version"#, values);
+
+    let res = pg_client.query(query.as_str(), &[]).await;
+
     unwrap(res)?;
   }
 

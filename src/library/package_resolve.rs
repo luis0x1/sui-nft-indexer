@@ -1,24 +1,49 @@
 use std::{ str::FromStr, sync::Arc };
 
-use anyhow::{ Error, Result };
+use anyhow::{ anyhow, Error, Result };
+use move_core_types::annotated_value::MoveStruct;
 use redis::AsyncCommands;
+use serde::{ Deserialize, Serialize };
 use sui_package_resolver::Package;
 use sui_sdk::rpc_types::{
+  SuiObjectData,
   SuiObjectDataOptions,
+  SuiObjectResponse,
   SuiParsedData,
   SuiRawData,
   SuiTransactionBlockResponseOptions,
 };
-use sui_types::{ base_types::ObjectID, digests::TransactionDigest, move_package::MovePackage };
+use sui_types::{
+  base_types::ObjectID,
+  collection_types::VecMap,
+  digests::TransactionDigest,
+  id::UID,
+  move_package::MovePackage,
+};
+use crate::{scan_worker::AppProvider, utils::error::OBJECT_NOT_FOUND_LOCAL};
 
-use crate::scan_worker::AppProvider;
-
-use super::display::StoredDisplay;
+use super::{ display::{ StoredDisplay }, sui_client::SuiClientProvider };
 
 pub struct PackageResolver {}
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DisplayObject {
+  pub id: UID,
+  pub fields: VecMap<String, String>,
+  pub version: u16,
+}
+
+pub enum PackagePublishObject {
+  UpgradeCap(ObjectID /* new package id */),
+  Display(StoredDisplay, Option<TransactionDigest>),
+}
+
 impl PackageResolver {
-  pub async fn get_package(provider: &AppProvider, package_id: &str) -> Result<(Package, u64)> {
+  pub async fn get_package(
+    provider: &AppProvider,
+    package_id: &str,
+    only_local: bool
+  ) -> Result<(Package, u64)> {
     let pg_client = provider.pg_client();
     let redis_client = provider.redis_client();
 
@@ -58,6 +83,10 @@ impl PackageResolver {
       }
     }
 
+    if only_local {
+      return Err(anyhow!(OBJECT_NOT_FOUND_LOCAL));
+    }
+
     let package = PackageResolver::get_package_from_blockchain(provider, package_id).await?;
     Ok(package)
   }
@@ -67,8 +96,9 @@ impl PackageResolver {
     package_id_raw: &str
   ) -> Result<(Package, u64)> {
     let sui_client = provider.sui_client();
-
+    let mut displays: Vec<(StoredDisplay, Option<TransactionDigest>)> = Vec::new();
     let package_id = ObjectID::from_str(package_id_raw)?;
+
     let package_with_tx_opt = sui_client.open_client(|client| async move {
       Ok(
         client
@@ -87,63 +117,19 @@ impl PackageResolver {
     let mut pkg_id = package_id;
 
     if let Some(previous_tx) = package_with_tx.previous_transaction {
-      let latest_tx_res = sui_client.open_client(|client| async move {
-        Ok(
-          client
-            .read_api()
-            .get_transaction_with_options(
-              previous_tx,
-              SuiTransactionBlockResponseOptions::new().with_object_changes()
-            ).await?
-        )
-      }).await;
-
-      if let Ok(latest_tx) = latest_tx_res {
-        if let Some(object_changes) = latest_tx.object_changes {
-          let object_ids = &Arc::new(
-            object_changes
-              .iter()
-              .map(|obj| obj.object_id())
-              .collect::<Vec<ObjectID>>()
-          );
-
-          let objects_res = sui_client.open_client(|client| async move {
-            Ok(
-              client
-                .read_api()
-                .multi_get_object_with_options(
-                  object_ids.as_ref().to_vec(),
-                  SuiObjectDataOptions::new().with_content().with_type()
-                ).await?
-            )
-          }).await;
-
-          if let Ok(objects) = objects_res {
-            objects.iter().for_each(|object| {
-              if let Some(data) = &object.data {
-                if let Some(type_id) = data.type_.as_ref() {
-                  let type_id_str = type_id.to_string();
-
-                  if type_id_str.ends_with("2::package::UpgradeCap") {
-                    if let Some(content) = &data.content {
-                      if let SuiParsedData::MoveObject(object_data) = content {
-                        let new_pkg_id = object_data.fields.field_value("package");
-
-                        if new_pkg_id.is_some() {
-                          let new_object_id = ObjectID::from_str(&new_pkg_id.unwrap().to_string());
-
-                          if new_object_id.is_ok() {
-                            pkg_id = new_object_id.unwrap();
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            });
+      if let Ok(package_objects) = Self::get_deploy_tx_detail(&sui_client, previous_tx).await {
+        // pkg_id = new_package_id;
+        package_objects.iter().for_each(|package_object| {
+          match package_object {
+            PackagePublishObject::UpgradeCap(new_package_id) => {
+              pkg_id = new_package_id.clone();
+            }
+            PackagePublishObject::Display(display_stored, transaction) => {
+              displays.push((display_stored.clone(), transaction.clone()));
+            }
+            // _ => {}
           }
-        }
+        });
       }
     }
 
@@ -170,6 +156,14 @@ impl PackageResolver {
       return Err(Error::msg("OBJECT_IS_NOT_PACKAGE"));
     };
     let move_package = package_content.to_move_package(u64::MAX)?;
+    if displays.len() > 0 {
+      let save_object_res = Self::save_displays(provider, displays).await;
+      match save_object_res {
+        Ok(_) => println!("Save display successfully"),
+        Err(_) => println!("Save display failed"),
+      }
+    }
+
     Self::save_package(
       provider,
       &move_package,
@@ -235,20 +229,22 @@ impl PackageResolver {
             None => "NULL",
           };
           let serializer = serde_json::to_string(package).unwrap();
+          let virtual_id = package.original_package_id();
           (
             format!("package_{}", package.id().to_string()),
+            virtual_id.to_string(),
             serializer.clone(),
             format!(
               r#"('{}', '{}', '{}', '{}', {}, NOW(), NOW())"#,
               package.id(),
-              package.id(),
+              virtual_id,
               serializer,
               u64::from(package.version()) as i64,
               tx
             ),
           )
         })
-        .collect::<Vec<(String, String, String)>>();
+        .collect::<Vec<(String, String, String, String)>>();
 
       pg_client.query(
         &format!(
@@ -259,7 +255,7 @@ impl PackageResolver {
           SET serialized = EXCLUDED.serialized",
           values
             .iter()
-            .map(|(_, __, v)| v.to_string())
+            .map(|(_, __, ___, v)| v.to_string())
             .collect::<Vec<String>>()
             .join(",")
         ),
@@ -268,14 +264,91 @@ impl PackageResolver {
 
       let mut pipe = redis::pipe();
       pipe.atomic();
-      values.iter().for_each(|(id, value, _)| {
+      values.iter().for_each(|(id, virtual_id, value, _)| {
         pipe.set(id, value);
+        pipe.set(virtual_id, value);
       });
 
       let _: () = pipe.query_async(&mut connection).await?;
     }
 
     Ok(())
+  }
+
+  pub async fn get_display(
+    provider: &AppProvider,
+    move_struct_type: &str,
+    move_struct: &MoveStruct
+  ) -> Result<String> {
+    let mut display: Option<String> = None;
+    let display_template_opt = Self::get_stored_display(provider, move_struct_type).await?;
+    if let Some(display_template) = display_template_opt {
+      let display_fields_res = StoredDisplay::get_rendered_fields(
+        &display_template.fields,
+        move_struct
+      );
+
+      if let Ok(display_fields) = display_fields_res {
+        display = display_fields.data.map(|d| serde_json::to_string(&d).unwrap());
+      }
+    }
+
+    if display.is_none() {
+      return Err(anyhow!("display is null"));
+    }
+
+    Ok(display.unwrap())
+  }
+
+  pub async fn get_stored_display(
+    provider: &AppProvider,
+    move_struct_type: &str
+  ) -> Result<Option<StoredDisplay>> {
+    let mut display: Option<StoredDisplay> = None;
+    let display_template_opt = provider.get_display(move_struct_type).await;
+    if let Some(display_template) = display_template_opt {
+      display = Some(display_template.as_ref().clone());
+    }
+
+    if display.is_some() {
+      return Ok(display);
+    }
+
+    let pg_client = provider.pg_client();
+    let redis_client = provider.redis_client();
+
+    let redis_key = format!("display_{}", move_struct_type);
+    let display_raw_res: Result<String, _> = redis_client
+      .get_multiplexed_tokio_connection().await?
+      .get(&redis_key).await;
+
+    if let Ok(display_raw) = display_raw_res {
+      let display_opt: Result<StoredDisplay, _> = serde_json::from_str(&display_raw);
+
+      if let Ok(d) = display_opt {
+        display = Some(d);
+      }
+    }
+
+    if display.is_some() {
+      return Ok(display);
+    }
+
+    let display_raw_res = pg_client.query_one(
+      "SELECT fields, version FROM displays WHERE object_type ORDER BY version DESC",
+      &[&move_struct_type]
+    ).await;
+
+    if let Ok(display_raw_db) = display_raw_res {
+      let display_raw: String = display_raw_db.get("fields");
+      let display_opt: Result<StoredDisplay, _> = serde_json::from_str(&display_raw);
+
+      if let Ok(d) = display_opt {
+        display = Some(d);
+      }
+    }
+
+    Ok(display)
   }
 
   pub async fn save_displays(
@@ -285,6 +358,13 @@ impl PackageResolver {
     let pg_client = provider.pg_client();
     let redis_client = provider.redis_client();
     let mut connection = redis_client.get_multiplexed_tokio_connection().await?;
+    let display_values: Vec<(String, Arc<StoredDisplay>)> = displays
+      .iter()
+      .map(|d| {
+        let display = d.0.clone();
+        (display.object_type.to_string(), Arc::new(display))
+      })
+      .collect();
 
     const BATCH_SIZE: usize = 1000;
     for chunk in displays.chunks(BATCH_SIZE) {
@@ -295,7 +375,7 @@ impl PackageResolver {
             Some(ref t) => &format!("'{}'", t.to_string()),
             None => "NULL",
           };
-          let fields = serde_json::to_string(&display.fields).unwrap();
+          let fields = serde_json::to_string(display).unwrap();
 
           (
             format!("display_{}", display.object_type),
@@ -337,8 +417,123 @@ impl PackageResolver {
       });
 
       let _: () = pipe.query_async(&mut connection).await?;
+      provider.set_displays(display_values.clone()).await;
     }
 
     Ok(())
+  }
+
+  async fn get_deploy_tx_detail(
+    sui_client: &SuiClientProvider,
+    previous_tx: TransactionDigest
+  ) -> Result<Vec<PackagePublishObject>> {
+    let mut package_objects = Vec::<PackagePublishObject>::new();
+    let latest_tx_res = sui_client.open_client(|client| async move {
+      Ok(
+        client
+          .read_api()
+          .get_transaction_with_options(
+            previous_tx,
+            SuiTransactionBlockResponseOptions::new().with_object_changes()
+          ).await?
+      )
+    }).await;
+
+    if let Ok(latest_tx) = latest_tx_res {
+      if let Some(object_changes) = latest_tx.object_changes {
+        let object_ids = &Arc::new(
+          object_changes
+            .iter()
+            .map(|obj| obj.object_id())
+            .collect::<Vec<ObjectID>>()
+        );
+
+        let objects_res = Self::get_all_objects(sui_client, object_ids).await;
+
+        if let Ok(objects) = objects_res {
+          objects.iter().for_each(|object| {
+            if let Some(data) = &object.data {
+              if let Some(type_id) = data.type_.as_ref() {
+                let type_id_str = type_id.to_string();
+
+                if let Some(package_object) = Self::handle_upgraded_cap(&type_id_str, data) {
+                  package_objects.push(package_object);
+                }
+
+                if let Some(package_object) = Self::handle_display(&type_id_str, data) {
+                  package_objects.push(package_object);
+                }
+              }
+            }
+          });
+        }
+      }
+    }
+
+    Ok(package_objects)
+  }
+
+  async fn get_all_objects(
+    sui_client: &SuiClientProvider,
+    object_ids: &Vec<ObjectID>
+  ) -> Result<Vec<SuiObjectResponse>> {
+    let mut objects = Vec::<SuiObjectResponse>::with_capacity(object_ids.len());
+    for chunk in object_ids.chunks(50) {
+      let objects_res = sui_client.open_client(|client| async move {
+        Ok(
+          client
+            .read_api()
+            .multi_get_object_with_options(
+              chunk.to_vec(),
+              SuiObjectDataOptions::new().with_content().with_type()
+            ).await?
+        )
+      }).await?;
+
+      objects.extend(objects_res);
+    }
+
+    Ok(objects)
+  }
+
+  fn handle_upgraded_cap(type_id: &String, data: &SuiObjectData) -> Option<PackagePublishObject> {
+    if type_id.ends_with("2::package::UpgradeCap") {
+      if let Some(content) = &data.content {
+        if let SuiParsedData::MoveObject(object_data) = content {
+          let new_pkg_id = object_data.fields.field_value("package");
+
+          if new_pkg_id.is_some() {
+            let new_object_id = ObjectID::from_str(&new_pkg_id.unwrap().to_string());
+
+            if new_object_id.is_ok() {
+              return Some(PackagePublishObject::UpgradeCap(new_object_id.unwrap()));
+            }
+          }
+        }
+      }
+    }
+
+    None
+  }
+
+  fn handle_display(type_id: &String, data: &SuiObjectData) -> Option<PackagePublishObject> {
+    if type_id.contains("2::display::Display") {
+      if let Some(content) = &data.content {
+        if let SuiParsedData::MoveObject(object_data) = content {
+          let fields = object_data.fields.clone().to_json_value();
+          let display_object_res: Result<DisplayObject, _> = serde_json::from_value(fields);
+          if let Ok(display_object) = display_object_res {
+            return Some(
+              PackagePublishObject::Display(
+                StoredDisplay::try_from_display_object(&type_id, &display_object)?,
+                data.previous_transaction
+              )
+            );
+          }
+        }
+      }
+    }
+
+    None
   }
 }

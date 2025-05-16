@@ -1,24 +1,31 @@
 use std::{ sync::Arc, thread, time::{ Duration, SystemTime } };
 
-use anyhow::{ Ok, Result };
+use anyhow::Result;
 use async_trait::async_trait;
+use redis::AsyncCommands;
 use sui_data_ingestion_core::Worker;
-use sui_types::full_checkpoint_content::CheckpointData;
+use sui_types::{ full_checkpoint_content::CheckpointData };
 use tokio::{ sync::{ Mutex, MutexGuard }, task::JoinHandle };
 use tokio_postgres::{ Client, NoTls };
 use reqwest::Client as HttpClient;
 use crate::{
-  env::get_env, library::{
+  env::get_env,
+  library::{
+    display::StoredDisplay,
     object_wrapper::DataDefWrapper,
     sui_client::SuiClientProvider,
-  }, queue::{
+  },
+  queue::{
     base_job::{ BaseJob, MessageContent },
     save_object_job::{ SaveObjectsJob, SaveObjectsJobPayload },
-  }, transaction::get_all_object_checkpoint, utils::btree_map::BTreeMapLimit
+  },
+  transaction::get_all_object_checkpoint,
+  utils::btree_map::BTreeMapLimit,
 };
 
 pub struct AppState {
   pub datatypes: BTreeMapLimit<String, Arc<DataDefWrapper>>,
+  pub displays: BTreeMapLimit<String, Arc<StoredDisplay>>,
 }
 
 pub struct AppProvider {
@@ -34,10 +41,7 @@ impl AppProvider {
   pub async fn init() -> Result<Self> {
     let env_var = get_env();
     let sui_client = SuiClientProvider::init().await?;
-    let (client, connection) = tokio_postgres::connect(
-      &env_var.postgres_url,
-      NoTls
-    ).await?;
+    let (client, connection) = tokio_postgres::connect(&env_var.postgres_url, NoTls).await?;
 
     tokio::spawn(async move {
       if let Err(e) = connection.await {
@@ -54,7 +58,12 @@ impl AppProvider {
       redis_client: Arc::new(redis_client),
       worker_client: Arc::new(worker_client),
       http_client: Arc::new(HttpClient::builder().build()?),
-      state: Arc::new(Mutex::new(AppState { datatypes: BTreeMapLimit::new(1000_000) })),
+      state: Arc::new(
+        Mutex::new(AppState {
+          datatypes: BTreeMapLimit::new(1000_000),
+          displays: BTreeMapLimit::new(1000_000),
+        })
+      ),
     })
   }
 
@@ -74,6 +83,29 @@ impl AppProvider {
     let datatypes = MutexGuard::map(self.state.lock().await, |state| &mut state.datatypes);
 
     datatypes.get(key).map(|d| d.clone())
+  }
+
+  pub async fn get_display(&self, key: &str) -> Option<Arc<StoredDisplay>> {
+    let displays = MutexGuard::map(self.state.lock().await, |state| &mut state.displays);
+
+    displays.get(key).map(|d| d.clone())
+  }
+
+  pub async fn set_display(&self, key: &str, display: StoredDisplay) -> Option<Arc<StoredDisplay>> {
+    let mut displays = MutexGuard::map(self.state.lock().await, |state| &mut state.displays);
+
+    (*displays).insert(key.to_string(), Arc::new(display))
+  }
+
+  pub async fn set_displays(
+    &self,
+    display_values: Vec<(String, Arc<StoredDisplay>)>
+  ) -> Option<Arc<StoredDisplay>> {
+    let mut displays = MutexGuard::map(self.state.lock().await, |state| &mut state.displays);
+
+    (*displays).insert_many(display_values);
+
+    None
   }
 
   pub async fn set_dataref(&self, key: &str, value: DataDefWrapper) -> Result<()> {
@@ -97,10 +129,10 @@ pub struct IndexerWorker(AppProvider);
 // static mut LAST_CHECKED: u64 = 131459304;
 // static mut CURRENT_CHECKPOINT: u64 = 131459304;
 //PACKAGE_NFT
-static mut LAST_CHECKED: u64 = 135210071;
-static mut CURRENT_CHECKPOINT: u64 = 135210071;
-// static mut LAST_CHECKED: u64 = 0;
-// static mut CURRENT_CHECKPOINT: u64 = 0;
+// static mut LAST_CHECKED: u64 = 144654153;
+// static mut CURRENT_CHECKPOINT: u64 = 144654153;
+static mut LAST_CHECKED: u64 = 0;
+static mut CURRENT_CHECKPOINT: u64 = 0;
 
 async fn process_checkpoint_clone(
   provider: &AppProvider,
@@ -202,6 +234,12 @@ async fn process_checkpoint_clone(
   unsafe {
     CURRENT_CHECKPOINT = checkpoint.checkpoint_summary.sequence_number;
   }
+  let sequence_number = checkpoint.checkpoint_summary.sequence_number;
+  if sequence_number > 10 {
+    let _: () = provider.redis_client
+      .get_multiplexed_async_connection().await?
+      .set("checkpoint", (sequence_number - 10).to_string()).await?;
+  }
 
   Ok(())
 }
@@ -214,6 +252,52 @@ impl IndexerWorker {
 
 impl IndexerWorker {
   pub async fn init() -> Result<(Self, u64, JoinHandle<()>)> {
+    let provider = AppProvider::init().await?;
+    let env_var = get_env();
+
+    let mut checkpoint_conn = provider.redis_client.get_multiplexed_tokio_connection().await?;
+    let mut has_latest_checkpoint = false;
+
+    if env_var.use_latest_checkpoint {
+      let current_checkpoint_res = provider.sui_client.open_client(|client| async move {
+        Ok(client.read_api().get_latest_checkpoint_sequence_number().await?)
+      }).await;
+
+      if let Ok(current_checkpoint) = current_checkpoint_res {
+        unsafe {
+          CURRENT_CHECKPOINT = current_checkpoint;
+          LAST_CHECKED = current_checkpoint;
+        }
+      }
+    } else {
+      let current_checkpoint_res: Result<String, _> = checkpoint_conn.get("checkpoint").await;
+
+      if let Ok(current_checkpoint) = current_checkpoint_res {
+        let checkpoint_num_res = current_checkpoint.parse::<u64>();
+        if checkpoint_num_res.is_ok() {
+          let checkpoint_num = checkpoint_num_res.unwrap();
+          unsafe {
+            has_latest_checkpoint = true;
+            CURRENT_CHECKPOINT = checkpoint_num;
+            LAST_CHECKED = checkpoint_num;
+          }
+        }
+      }
+    }
+
+    if !has_latest_checkpoint {
+      let current_checkpoint_res = provider.sui_client.open_client(|client| async move {
+        Ok(client.read_api().get_latest_checkpoint_sequence_number().await?)
+      }).await;
+
+      if let Ok(current_checkpoint) = current_checkpoint_res {
+        unsafe {
+          CURRENT_CHECKPOINT = current_checkpoint;
+          LAST_CHECKED = current_checkpoint;
+        }
+      }
+    }
+
     let initital_checkpoint = unsafe { CURRENT_CHECKPOINT };
     let performance_task = tokio::spawn(async {
       loop {
@@ -227,7 +311,7 @@ impl IndexerWorker {
         }
       }
     });
-    let worker = Self(AppProvider::init().await?);
+    let worker = Self(provider);
 
     Ok((worker, initital_checkpoint, performance_task))
   }

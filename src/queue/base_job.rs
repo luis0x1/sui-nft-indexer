@@ -1,14 +1,18 @@
-use std::sync::Arc;
+use std::{ collections::VecDeque, sync::Arc };
 
 use anyhow::Result;
 use async_trait::async_trait;
 use redis::{ aio::MultiplexedConnection, AsyncCommands, ToRedisArgs };
 use serde::{ Deserialize, Serialize };
+use tokio::sync::RwLock;
 use uuid::Uuid;
 use reqwest::Client as HttpClient;
-use crate::{ env::get_env, scan_worker::AppProvider };
+use crate::{ env::{get_env, AppType}, scan_worker::AppProvider };
 
-use super::save_object_job::SaveObjectsJobPayload;
+use super::{
+  parse_object_fields_job::ParseObjectsFieldsJobPayload,
+  save_object_job::SaveObjectsJobPayload,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageContent {
@@ -16,6 +20,7 @@ pub enum MessageContent {
   I128(i128),
   String(String),
   SaveObjects(SaveObjectsJobPayload),
+  ParseObjectsFields(ParseObjectsFieldsJobPayload),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,9 +65,54 @@ pub trait BaseJob<T> {
   async fn handle(provider: &AppProvider, job: T) -> Result<()>;
   #[allow(unused)]
   async fn dispatch(provider: &AppProvider, payload: MessageContent) -> Result<()>;
+  async fn dispatch_current(
+    provider: &AppProvider,
+    all_tasks: Arc<RwLock<VecDeque<Task>>>,
+    payload: MessageContent
+  ) -> Result<()>;
   async fn send(
     redis_connection: &mut MultiplexedConnection,
     http_client: Arc<HttpClient>,
+    payload: MessageContent
+  ) -> Result<()> {
+    let id = Uuid::new_v4().to_string();
+    let env = get_env();
+    let message = Message {
+      id: id.clone(),
+      content: payload.clone(),
+    };
+    let channel_id = env.channel_id;
+    let task_key = format!("{}:message:{}", channel_id, id);
+
+    let pubsub_message = PubSubMessage {
+      id: id.clone(),
+      key: task_key.clone(),
+    };
+
+    let _: () = redis_connection.set(task_key, &message).await?;
+
+    let mut worker_url = env.worker_url;
+
+    if env.app_type == AppType::Worker {
+      worker_url = format!("http://{}/message", worker_url);
+    }
+
+    let send_notification = http_client
+      .post(worker_url)
+      .json(&pubsub_message)
+      .send().await;
+
+    match send_notification {
+      Err(e) => eprintln!("Cannot send notification to worker: {:?}", e),
+      Ok(_) => eprintln!("Send notification to worker successfully"),
+    }
+
+    Ok(())
+  }
+
+  async fn send_current(
+    redis_connection: &mut MultiplexedConnection,
+    all_tasks: Arc<RwLock<VecDeque<Task>>>,
     payload: MessageContent
   ) -> Result<()> {
     let id = Uuid::new_v4().to_string();
@@ -73,22 +123,12 @@ pub trait BaseJob<T> {
     let channel_id = get_env().channel_id;
     let task_key = format!("{}:message:{}", channel_id, id);
 
-    let pubsub_message = PubSubMessage {
-      id: id.clone(),
-      key: task_key.clone(),
-    };
-
     let _: () = redis_connection.set(task_key, &message).await?;
 
-    let send_notification = http_client
-      .post("http://127.0.0.1:2811/message")
-      .json(&pubsub_message)
-      .send().await;
+    let mut app_task = all_tasks.write().await;
+    app_task.push_back(message.into());
 
-    match send_notification {
-      Err(e) => eprintln!("Cannot send notification to worker: {:?}", e),
-      Ok(_) => eprintln!("Send notification to worker successfully"),
-    }
+    drop(app_task);
 
     Ok(())
   }

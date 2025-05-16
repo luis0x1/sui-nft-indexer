@@ -9,6 +9,7 @@ use crate::{
   env::get_env,
   queue::{
     base_job::{ BaseJob, Message, MessageContent, PubSubMessage, Task },
+    parse_object_fields_job::ParseObjectsFieldsJob,
     save_object_job::SaveObjectsJob,
   },
   scan_worker::AppProvider,
@@ -139,7 +140,7 @@ async fn subscriber(
       )
     );
 
-  let listener = tokio::net::TcpListener::bind("127.0.0.1:2811").await?;
+  let listener = tokio::net::TcpListener::bind(get_env().worker_url).await?;
   println!("Worker listen on port 2811");
   axum::serve(listener, app).await?;
 
@@ -181,8 +182,13 @@ async fn process_task(
   let res = _process_task(provider, redis_connection, &task).await;
 
   match res {
-    Ok(_) =>
-      println!("process task {} successfully in thread: {:?}", task.key, thread::current().id()),
+    Ok(task_type) =>
+      println!(
+        "process task [{}]{} successfully in thread: {:?}",
+        task_type,
+        task.key,
+        thread::current().id()
+      ),
     Err(error) => eprintln!("process task {:?} failed: {:?}", task.key, error),
   }
 }
@@ -191,9 +197,18 @@ async fn _process_task(
   provider: &Arc<AppProvider>,
   redis_connection: &mut MultiplexedConnection,
   task: &Task
-) -> Result<()> {
+) -> Result<String> {
+  let task_type: String;
+
   match task.payload.content.clone() {
-    MessageContent::SaveObjects(job) => SaveObjectsJob::handle(provider, job).await?,
+    MessageContent::SaveObjects(job) => {
+      SaveObjectsJob::handle(provider, job).await?;
+      task_type = "SaveObjectsJob".to_string();
+    }
+    MessageContent::ParseObjectsFields(job) => {
+      ParseObjectsFieldsJob::handle(provider, job).await?;
+      task_type = "ParseObjectsFields".to_string();
+    }
     _ => {
       return Err(Error::msg("Job is not support"));
     }
@@ -201,5 +216,5 @@ async fn _process_task(
 
   let _: () = redis_connection.del(&task.key).await?;
 
-  Ok(())
+  Ok(task_type.to_string())
 }

@@ -9,9 +9,12 @@ pub struct EnvValue {
   pub channel_id: String,
   pub postgres_url: String,
   pub redis_url: String,
+  pub worker_url: String,
+  pub use_latest_checkpoint: bool,
+  pub concurrency: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum AppType {
   Scan = 1,
@@ -25,7 +28,7 @@ impl From<String> for AppType {
       "1" => AppType::Scan,
       "2" => AppType::Worker,
       "3" => AppType::Test,
-      _ => AppType::Scan
+      _ => AppType::Scan,
     }
   }
 }
@@ -38,6 +41,9 @@ static ENV: LazyLock<Arc<Mutex<EnvValue>>> = LazyLock::new(|| {
       channel_id: "".to_string(),
       redis_url: "".to_string(),
       postgres_url: "".to_string(),
+      worker_url: "".to_string(),
+      use_latest_checkpoint: false,
+      concurrency: 1,
     })
   )
 });
@@ -53,6 +59,13 @@ pub fn init_env() {
   env.worm_nft_type = std::env::var("WORM_NFT_TYPE").unwrap_or("default".to_string());
   env.app_type = std::env::var("APP_TYPE").unwrap_or("1".to_string()).into();
   env.channel_id = std::env::var("CHANNEL_ID").unwrap_or("channel_id".to_string());
-  env.channel_id = std::env::var("DATABASE_URL").unwrap_or("".to_string());
-  env.channel_id = std::env::var("REDIS_URL").unwrap_or("".to_string());
+  env.postgres_url = std::env::var("DATABASE_URL").unwrap_or("".to_string());
+  env.redis_url = std::env::var("REDIS_URL").unwrap_or("".to_string());
+  env.worker_url = std::env::var("WORKER_URL").unwrap_or("http://127.0.0.1:2811".to_string());
+  env.use_latest_checkpoint =
+    std::env::var("USE_LATEST_CHECKPOINT").unwrap_or("false".to_string()) == "true";
+  env.concurrency = std::env
+    ::var("CONCURRENCY")
+    .map(|v| v.parse::<usize>().unwrap_or(1))
+    .unwrap_or(1);
 }

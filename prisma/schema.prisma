@@ -36,6 +36,7 @@ model Object {
   @@index([type])
   @@index([owner, type])
   @@index([updatedAt(sort: Desc)])
+  @@index([id, version(sort: Desc)])
   @@map("objects")
 }
 
@@ -58,6 +59,7 @@ model Package {
   updatedAt    DateTime @default(dbgenerated("NOW()")) @map("updated_at")
   createdAt    DateTime @default(dbgenerated("NOW()")) @map("created_at")
 
+  @@index([id, version(sort: Desc)])
   @@index([virtual_id, version(sort: Desc)])
   @@map("packages")
 }
@@ -72,5 +74,6 @@ model Display {
   updatedAt    DateTime @default(dbgenerated("NOW()")) @map("updated_at")
   createdAt    DateTime @default(dbgenerated("NOW()")) @map("created_at")
 
+  @@index([object_type, version(sort: Desc)])
   @@map("displays")
 }

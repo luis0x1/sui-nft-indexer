@@ -6,6 +6,8 @@ pub struct AppError {
     message: String,
 }
 
+pub const OBJECT_NOT_FOUND_LOCAL: &'static str = "OBJECT_NOT_FOUND_LOCAL";
+
 impl AppError {
     pub fn new(message: &str) -> Self {
         Self {

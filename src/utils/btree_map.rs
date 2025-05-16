@@ -32,4 +32,10 @@ impl<K, V> BTreeMapLimit<K, V> {
 
         inserted
     }
+
+    pub fn insert_many(&mut self, values: Vec<(K, V)>) where K: Ord {
+        for value in values {
+            self.insert(value.0, value.1);
+        }
+    }
 }
