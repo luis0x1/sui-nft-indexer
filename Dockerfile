@@ -16,7 +16,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build  --release
 
 RUN rm -rf ./src
 COPY ./src ./src
-COPY .env .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry <<EOF
   set -e
@@ -31,7 +30,7 @@ RUN apt-get update && apt-get install -y libjemalloc-dev ca-certificates curl
 WORKDIR /app
 
 COPY --from=builder /app/target/release/birds-indexer /usr/local/bin
-COPY --from=builder /app/.env /app
+
 RUN apt update && apt install -y libpq5 ca-certificates libpq-dev
 
 # Don't run production as root
