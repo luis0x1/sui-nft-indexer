@@ -7,9 +7,9 @@ on:
     branches: [ "main", "dev" ]
 
 env:
-  IMAGE_CACHE_SOURCE: latest
-  IMAGE_REGISTRY: dainqdev
-  IMAGE_NAME: birds-indexer
+  IMAGE_CACHE_SOURCE: staging
+  IMAGE_REGISTRY: anhskohbo
+  IMAGE_NAME: sui-indexer
   IMAGE_TAG: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'latest' }}
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       - name: Log into registry
         uses: docker/login-action@v3
         with:
-          username: dainqdev
+          username: anhskohbo
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Build and push Docker image with Buildx
