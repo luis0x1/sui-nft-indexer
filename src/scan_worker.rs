@@ -6,14 +6,12 @@ use redis::AsyncCommands;
 use sui_data_ingestion_core::Worker;
 use sui_types::{ full_checkpoint_content::CheckpointData };
 use tokio::{ sync::{ Mutex, MutexGuard }, task::JoinHandle };
-use tokio_postgres::{ Client, NoTls };
+use tokio_postgres::Client;
 use reqwest::Client as HttpClient;
 use crate::{
   env::get_env,
   library::{
-    display::StoredDisplay,
-    object_wrapper::DataDefWrapper,
-    sui_client::SuiClientProvider,
+    display::StoredDisplay, object_wrapper::DataDefWrapper, pg::get_postgres_connection, sui_client::SuiClientProvider
   },
   queue::{
     base_job::{ BaseJob, MessageContent },
@@ -41,13 +39,8 @@ impl AppProvider {
   pub async fn init() -> Result<Self> {
     let env_var = get_env();
     let sui_client = SuiClientProvider::init().await?;
-    let (client, connection) = tokio_postgres::connect(&env_var.postgres_url, NoTls).await?;
 
-    tokio::spawn(async move {
-      if let Err(e) = connection.await {
-        eprintln!("connection error: {}", e);
-      }
-    });
+    let client = get_postgres_connection(env_var.disable_ssl).await?;
 
     let redis_client = redis::Client::open(format!("{}/1", env_var.redis_url))?;
     let worker_client = redis::Client::open(format!("{}/9", env_var.redis_url))?;

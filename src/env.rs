@@ -12,6 +12,7 @@ pub struct EnvValue {
   pub worker_url: String,
   pub use_latest_checkpoint: bool,
   pub concurrency: usize,
+  pub disable_ssl: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -44,6 +45,7 @@ static ENV: LazyLock<Arc<Mutex<EnvValue>>> = LazyLock::new(|| {
       worker_url: "".to_string(),
       use_latest_checkpoint: false,
       concurrency: 1,
+      disable_ssl: true,
     })
   )
 });
@@ -68,4 +70,5 @@ pub fn init_env() {
     ::var("CONCURRENCY")
     .map(|v| v.parse::<usize>().unwrap_or(1))
     .unwrap_or(1);
+  env.disable_ssl = std::env::var("DISABLE_SSL").unwrap_or("true".to_string()) == "true";
 }

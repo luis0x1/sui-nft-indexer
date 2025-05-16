@@ -1,4 +1,4 @@
-use std::{ collections::VecDeque, str::FromStr, sync::Arc };
+use std::{ collections::VecDeque, str::FromStr, sync::Arc, thread, time::Duration };
 
 use crate::{
   library::{ package_resolve::PackageResolver, struct_resolver::StructResolver },
@@ -25,6 +25,7 @@ pub struct ParseObjectsFieldsJobPayload {
 #[async_trait]
 impl BaseJob<ParseObjectsFieldsJobPayload> for ParseObjectsFieldsJob {
   async fn handle(provider: &AppProvider, job: ParseObjectsFieldsJobPayload) -> anyhow::Result<()> {
+    thread::sleep(Duration::from_millis(100));
     let tx_objects: Vec<Object> = serde_json::from_str(&job.objects)?;
     let mut objects = Vec::<UpdateObjectArgs>::new();
 
