@@ -41,7 +41,7 @@ impl StoredDisplay {
       return None;
     };
 
-    let Some(object_type) = DisplayVersionUpdatedEvent::inner_type(&struct_tag) else {
+    let Some(object_type) = struct_tag.type_params.first() else {
       return None;
     };
 

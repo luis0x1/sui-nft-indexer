@@ -1,14 +1,10 @@
 extern crate dotenv;
 
-use std::{ sync::Arc, thread, time::Duration };
-
 use anyhow::{ Ok, Result };
 use env::{ get_env, init_env, AppType };
-use futures::future::join_all;
-use queue::base_job::PubSubMessage;
+use library::package_resolve::PackageResolver;
 use sui_data_ingestion_core::setup_single_workflow;
-use scan_worker::IndexerWorker;
-use uuid::Uuid;
+use scan_worker::{AppProvider, IndexerWorker};
 use worker::setup_worker_flow;
 
 pub mod library;
@@ -47,25 +43,8 @@ async fn main() -> Result<()> {
       setup_worker_flow(env_var.concurrency as u8).await?;
     }
     AppType::Test => {
-      let client = Arc::new(reqwest::Client::new());
-      thread::sleep(Duration::from_secs(3));
-      for _ in 0..5_000_0 {
-        join_all(
-          vec![0; 20].iter().map(|_| {
-            let client_clone = client.clone();
-
-            tokio::spawn(async move { client_clone
-                .post("http://0.0.0.0:2811/message")
-                .json(
-                  &(PubSubMessage {
-                    id: Uuid::new_v4().to_string(),
-                    key: "data".to_string(),
-                  })
-                )
-                .send().await })
-          })
-        ).await;
-      }
+      let provider = AppProvider::init().await?;
+      PackageResolver::get_package(&provider, "0x2a45cae4986125fc8872a054398b3c9a80201e61f75a011af48f2af0edea66ec", false).await?;
     }
   }
 
