@@ -996,7 +996,9 @@ dependencies = [
  "futures",
  "move-binary-format",
  "move-core-types",
+ "native-tls",
  "openssl",
+ "postgres-native-tls",
  "postgres-openssl",
  "prometheus",
  "proptest",
@@ -5314,6 +5316,18 @@ name = "portable-atomic"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "350e9b48cbc6b0e028b0473b114454c6316e57336ee184ceab6e53f72c178b3e"
+
+[[package]]
+name = "postgres-native-tls"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1f39498473c92f7b6820ae970382c1d83178a3454c618161cb772e8598d9f6f"
+dependencies = [
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres",
+]
 
 [[package]]
 name = "postgres-openssl"

@@ -1,6 +1,9 @@
-use std::sync::{ Arc, LazyLock, Mutex };
+use std::{ str::FromStr, sync::{ Arc, LazyLock, Mutex } };
 
+use anyhow::{ Result, Error };
 use serde::{ Deserialize, Serialize };
+
+use crate::string;
 
 #[derive(Clone, Debug)]
 pub struct EnvValue {
@@ -23,14 +26,16 @@ pub enum AppType {
   Test = 3,
 }
 
-impl From<String> for AppType {
-  fn from(value: String) -> Self {
-    match value.as_str() {
+impl FromStr for AppType {
+  type Err = Error;
+
+  fn from_str(s: &str) -> Result<Self> {
+    Ok(match s {
       "1" => AppType::Scan,
       "2" => AppType::Worker,
       "3" => AppType::Test,
       _ => AppType::Scan,
-    }
+    })
   }
 }
 
@@ -58,17 +63,21 @@ pub fn get_env() -> EnvValue {
 pub fn init_env() {
   dotenv::dotenv().unwrap();
   let mut env = ENV.lock().unwrap();
-  env.worm_nft_type = std::env::var("WORM_NFT_TYPE").unwrap_or("default".to_string());
-  env.app_type = std::env::var("APP_TYPE").unwrap_or("1".to_string()).into();
-  env.channel_id = std::env::var("CHANNEL_ID").unwrap_or("channel_id".to_string());
-  env.postgres_url = std::env::var("DATABASE_URL").unwrap_or("".to_string());
-  env.redis_url = std::env::var("REDIS_URL").unwrap_or("".to_string());
-  env.worker_url = std::env::var("WORKER_URL").unwrap_or("http://127.0.0.1:2811".to_string());
-  env.use_latest_checkpoint =
-    std::env::var("USE_LATEST_CHECKPOINT").unwrap_or("false".to_string()) == "true";
-  env.concurrency = std::env
-    ::var("CONCURRENCY")
-    .map(|v| v.parse::<usize>().unwrap_or(1))
-    .unwrap_or(1);
-  env.disable_ssl = std::env::var("DISABLE_SSL").unwrap_or("true".to_string()) == "true";
+
+  env.worm_nft_type = load_env("WORM_NFT_TYPE", string!("default"));
+  env.app_type = load_env("APP_TYPE", AppType::Scan);
+  env.channel_id = load_env("CHANNEL_ID", string!("channel_id"));
+  env.postgres_url = load_env("DATABASE_URL", string!(""));
+  env.redis_url = load_env("REDIS_URL", string!(""));
+  env.worker_url = load_env("WORKER_URL", string!("http://127.0.0.1:2811"));
+  env.use_latest_checkpoint = load_env("USE_LATEST_CHECKPOINT", false);
+  env.concurrency = load_env("CONCURRENCY", 1);
+  env.disable_ssl = load_env("DISABLE_SSL", true);
+}
+
+fn load_env<T>(key: &str, default: T) -> T where T: FromStr + Clone {
+  std::env
+    ::var(key)
+    .map(|v| v.parse::<T>().unwrap_or(default.clone()))
+    .unwrap_or(default)
 }
