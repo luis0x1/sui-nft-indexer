@@ -61,7 +61,7 @@ pub fn get_env() -> EnvValue {
 }
 
 pub fn init_env() {
-  dotenv::dotenv().unwrap();
+  let _ = dotenv::dotenv();
   let mut env = ENV.lock().unwrap();
 
   env.worm_nft_type = load_env("WORM_NFT_TYPE", string!("default"));
