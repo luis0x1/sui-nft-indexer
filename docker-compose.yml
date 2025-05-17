@@ -7,7 +7,7 @@ services:
       dockerfile: ./Dockerfile
     restart: unless-stopped
     env_file:
-      - .env.docker
+      - .env.scan
     environment:
       APP_TYPE: 1
       WORKER_URL: http://worker:2811/message
@@ -24,7 +24,7 @@ services:
       dockerfile: ./Dockerfile
     restart: unless-stopped
     env_file:
-      - .env.docker
+      - .env.worker
     environment:
       APP_TYPE: 2
       WORKER_URL: 0.0.0.0:2811

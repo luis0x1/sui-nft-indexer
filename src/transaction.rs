@@ -105,6 +105,10 @@ async fn process_object(
   _latest_digest: &TransactionDigest,
   confirmed_timestamp: &str
 ) {
+  if object.is_coin() || object.is_gas_coin() {
+    //skip process gas
+    return;
+  }
   let object_type = object.type_().map(|v| v.to_string());
 
   if let Some(ref type_str) = object_type {
