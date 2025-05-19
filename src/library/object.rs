@@ -1,9 +1,8 @@
+use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sui_types::{ base_types::SuiAddress, object::Data };
 
-use crate::{ env::get_env, transaction::SuiObject, scan_worker::AppProvider };
-
-use super::error::{ unwrap, AppError };
+use crate::{ env::get_env, scan_worker::AppProvider, transaction::SuiObject };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
@@ -79,7 +78,7 @@ fn parse_vector_to_sql(data: &Vec<u8>) -> String {
 pub async fn insert_objects(
   provider: &AppProvider,
   objects: Vec<SuiObject>
-) -> Result<(), AppError> {
+) -> Result<()> {
   // Process objects in batches to avoid huge SQL queries
   const BATCH_SIZE: usize = 1000;
 
@@ -122,8 +121,7 @@ pub async fn insert_objects(
       WHERE objects.updated_at < EXCLUDED.updated_at
       "#, values, "{}", "{}");
 
-    let res = pg_client.query(query.as_str(), &[]).await;
-    unwrap(res)?;
+    pg_client.query(query.as_str(), &[]).await?;
   }
 
   Ok(())
@@ -139,7 +137,7 @@ pub struct UpdateObjectArgs {
 pub async fn update_object_fields(
   provider: &AppProvider,
   args: UpdateObjectArgs
-) -> Result<(), AppError> {
+) -> Result<()> {
   let pg_client = &provider.pg_client;
   let query =
     r#"UPDATE objects
@@ -147,12 +145,10 @@ pub async fn update_object_fields(
           display = $4::jsonb
       WHERE id = $1 AND version = $2"#;
 
-  let res = pg_client.query(
+  pg_client.query(
     query,
     &[&args.id, &(args.version as i64), &args.fields, &args.display]
-  ).await;
-
-  unwrap(res)?;
+  ).await?;
 
   Ok(())
 }
@@ -160,7 +156,7 @@ pub async fn update_object_fields(
 pub async fn update_objects_fields(
   provider: &AppProvider,
   args: Vec<UpdateObjectArgs>
-) -> Result<(), AppError> {
+) -> Result<()> {
   const BATCH_SIZE: usize = 1000;
   let pg_client = &provider.pg_client;
 
@@ -185,9 +181,7 @@ pub async fn update_objects_fields(
           FROM (VALUES {}) v(id, version, fields, display)
           WHERE objects.id = v.id AND objects.version = v.version"#, values);
 
-    let res = pg_client.query(query.as_str(), &[]).await;
-
-    unwrap(res)?;
+    pg_client.query(query.as_str(), &[]).await?;
   }
 
   Ok(())

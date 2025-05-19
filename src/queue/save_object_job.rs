@@ -5,13 +5,11 @@ use crate::{
     display::StoredDisplay,
     package_resolve::PackageResolver,
     struct_resolver::StructResolver,
+    object::{ get_object_content_bytes, insert_objects, is_valid_object },
   },
   scan_worker::AppProvider,
   transaction::{ SuiObject, TransactionObject },
-  utils::{
-    error::OBJECT_NOT_FOUND_LOCAL,
-    object::{ get_object_content_bytes, insert_objects, is_valid_object },
-  },
+  utils::{ error::OBJECT_NOT_FOUND_LOCAL },
 };
 
 use super::{
@@ -112,7 +110,7 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
 
                 if error.to_string().contains(OBJECT_NOT_FOUND_LOCAL) {
                   objects_failed.push(object.clone());
-                  println!("[SaveObjectsJob]: add object to [ParseObjectsFieldsJob]")
+                  println!("[SaveObjectsJob]: add object to [ParseObjectsFieldsJob]");
                 } else {
                   eprintln!(
                     "[SaveObjectsJob]: error ================> {:?} -> {:?} -> {:?}",

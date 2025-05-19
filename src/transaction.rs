@@ -1,7 +1,5 @@
 use crate::{
-  library::display::StoredDisplay,
-  utils::{ datetime::millis_to_iso, object::is_valid_object },
-  scan_worker::AppProvider,
+  library::{display::StoredDisplay, object::is_valid_object}, scan_worker::AppProvider, utils::datetime::millis_to_iso
 };
 use serde::{ Deserialize, Serialize };
 use std::{ collections::HashSet, fmt::Display };

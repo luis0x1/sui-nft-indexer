@@ -3,7 +3,7 @@ use std::{ collections::VecDeque, str::FromStr, sync::Arc, thread, time::Duratio
 use crate::{
   library::{ package_resolve::PackageResolver, struct_resolver::StructResolver },
   scan_worker::AppProvider,
-  utils::object::{ is_valid_object, update_objects_fields, UpdateObjectArgs },
+  library::object::{ is_valid_object, update_objects_fields, UpdateObjectArgs },
 };
 
 use super::base_job::{ BaseJob, MessageContent, Task };
