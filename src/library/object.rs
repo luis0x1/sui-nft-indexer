@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sui_types::{ base_types::SuiAddress, object::Data };
 
-use crate::{ constants::{is_in_blocklist}, scan_worker::AppProvider, transaction::SuiObject };
+use crate::{ constants::{ is_in_blocklist }, scan_worker::AppProvider, transaction::SuiObject };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
@@ -70,10 +70,6 @@ fn parse_object_display_to_sql(object: &SuiObject) -> String {
   }
 }
 
-fn parse_vector_to_sql(data: &Vec<u8>) -> String {
-  format!("{:?}", data)
-}
-
 pub async fn insert_objects(provider: &AppProvider, objects: Vec<SuiObject>) -> Result<()> {
   // Process objects in batches to avoid huge SQL queries
   const BATCH_SIZE: usize = 1000;
@@ -90,7 +86,7 @@ pub async fn insert_objects(provider: &AppProvider, objects: Vec<SuiObject>) -> 
           object.owner(),
           parse_object_type_to_sql(object),
           object.status().to_string(),
-          parse_vector_to_sql(object.content_bytes()),
+          "[]",
           parse_object_content_to_sql(object),
           parse_object_display_to_sql(object),
           object.version(),
@@ -143,12 +139,15 @@ pub async fn update_object_fields(provider: &AppProvider, args: UpdateObjectArgs
         WHERE id = $1"#;
     pg_client.query(query, &[&args.id]).await?;
   } else {
-    let query =
+    let query = format!(
       r#"UPDATE objects
-      SET fields = $3::jsonb,
-          display = $4::jsonb
-      WHERE id = $1 AND version = $2"#;
-    pg_client.query(query, &[&args.id, &(args.version as i64), &args.fields, &args.display]).await?;
+      SET fields = $${}$$::jsonb,
+          display = $${}$$::jsonb
+      WHERE id = $1 AND version = $2::bigint"#,
+      &args.fields,
+      &args.display
+    );
+    pg_client.query(query.as_str(), &[&args.id, &args.version.to_string()]).await?;
   }
 
   Ok(())

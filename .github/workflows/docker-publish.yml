@@ -2,9 +2,9 @@ name: Build Docker
 
 on:
   push:
-    branches: [ "main", "dev" ]
+    branches: ['main', 'dev']
   pull_request:
-    branches: [ "main", "dev" ]
+    branches: ['main', 'dev']
 
 env:
   IMAGE_CACHE_SOURCE: staging
@@ -13,49 +13,9 @@ env:
   IMAGE_TAG: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'latest' }}
 
 jobs:
-  build_binary:
-    runs-on: ubuntu-latest
-    container:
-      image: hatembt/rust-ci:latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up cache for Rust
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cargo/
-            .cache/sccache
-            app/target/release/birds-indexer
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-
-
-      - name: Set up environment
-        run: |
-          export CARGO_HOME="${PWD}/.cargo"
-          echo "CARGO_HOME=$CARGO_HOME" >> $GITHUB_ENV
-          export SCCACHE_DIR="${PWD}/.cache/sccache"
-          echo "SCCACHE_DIR=$SCCACHE_DIR" >> $GITHUB_ENV
-          export PATH="${PWD}/.cargo/bin:$PATH"
-          echo "${PWD}/.cargo/bin" >> $GITHUB_PATH
-          export RUSTC_WRAPPER="${CARGO_HOME}/bin/sccache"
-          echo "RUSTC_WRAPPER=$RUSTC_WRAPPER" >> $GITHUB_ENV
-
-      - name: Build Rust binary
-        run: cargo build --release
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: birds-indexer
-          path: app/target/release/birds-indexer
-          retention-days: 1
-
   build:
     runs-on: ubuntu-latest
-    needs: build_binary
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -74,17 +34,6 @@ jobs:
           username: dainqdev
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Restore cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cargo/
-            .cache/sccache
-            app/target/release/birds-indexer
-          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-
-
       # Build and push Docker image with Buildx
       # https://github.com/docker/build-push-action
       - name: Build and push Docker image
@@ -96,3 +45,5 @@ jobs:
           platforms: linux/amd64
           tags: |
             ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-to: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }},mode=max
