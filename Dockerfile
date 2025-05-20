@@ -14,7 +14,7 @@ COPY ./Cargo.toml ./Cargo.toml
 COPY ./Cargo.lock ./Cargo.lock 
 
 RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN cargo build  --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build  --release
 RUN rm -f target/release/deps/birds-indexer*
 RUN rm -rf ./src
 COPY ./src ./src
@@ -26,14 +26,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry <<EOF
 EOF
 
 FROM debian:bullseye-slim AS runtime
-
+# Use jemalloc as memory allocator
 RUN apt-get update && apt-get install -y libjemalloc-dev ca-certificates curl
+WORKDIR /app
 
+COPY --from=builder /app/target/release/birds-indexer /usr/local/bin
 
-COPY --from=builder /app/target/release/birds-indexer /app
-COPY --from=builder /app .
 RUN apt update && apt install -y libpq5 ca-certificates libpq-dev
 
 EXPOSE 2811 2811
 
-CMD ["/app/birds-indexer"]
+CMD ["/usr/local/bin/birds-indexer"]

@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
       let provider = AppProvider::init().await?;
       let res = BlacklistResolver::set_blacklist(&provider, "object_type", true).await;
 
-      // println!("res: {:?}", res);
+      println!("res: {:?}", res);
     }
   }
 
