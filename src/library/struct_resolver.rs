@@ -1,5 +1,4 @@
 use std::{ collections::BTreeMap, str::FromStr, sync::Arc };
-use redis::AsyncCommands;
 use anyhow::{ Error, Result };
 use move_core_types::{
   account_address::AccountAddress,
@@ -89,8 +88,6 @@ impl StructResolver {
     version: u64
   ) -> Result<()> {
     let pg_client = provider.pg_client();
-    let redis_client = provider.redis_client();
-    let mut connection = redis_client.get_multiplexed_tokio_connection().await?;
 
     let seried_value = serde_json::to_string(&data_type)?;
 
@@ -109,10 +106,6 @@ impl StructResolver {
       Ok(value) => value.len() > 0,
       Err(_) => true,
     };
-
-    if inserted {
-      let _: () = connection.set(key, seried_value).await?;
-    }
 
     Ok(())
   }

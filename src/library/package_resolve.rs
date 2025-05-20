@@ -2,7 +2,6 @@ use std::{ str::FromStr, sync::Arc };
 
 use anyhow::{ anyhow, Error, Result };
 use move_core_types::annotated_value::MoveStruct;
-use redis::AsyncCommands;
 use serde::{ Deserialize, Serialize };
 use sui_package_resolver::Package;
 use sui_sdk::rpc_types::{
@@ -45,24 +44,6 @@ impl PackageResolver {
     only_local: bool
   ) -> Result<(Package, u64)> {
     let pg_client = provider.pg_client();
-    let redis_client = provider.redis_client();
-
-    let redis_key = format!("package_{}", package_id);
-    let package_raw_res: Result<String, _> = redis_client
-      .get_multiplexed_tokio_connection().await?
-      .get(&redis_key).await;
-
-    if let Ok(package_raw) = package_raw_res {
-      let move_package_opt: Result<(MovePackage, u64), _> = serde_json::from_str(&package_raw);
-
-      if let Ok(move_package) = move_package_opt {
-        let package_res = Package::read_from_package(&move_package.0);
-
-        if let Ok(package) = package_res {
-          return Ok((package, move_package.1));
-        }
-      }
-    }
 
     let package_raw_res = pg_client.query_one(
       "SELECT serialized, version FROM packages WHERE id = $1 OR virtual_id = $1 ORDER BY version DESC",
@@ -182,8 +163,6 @@ impl PackageResolver {
     previous_transaction: Option<TransactionDigest>
   ) -> Result<()> {
     let pg_client = provider.pg_client();
-    let redis_client = provider.redis_client();
-    let mut connection = redis_client.get_multiplexed_tokio_connection().await?;
 
     let package_raw = serde_json::to_string(package)?;
     let tx = match previous_transaction {
@@ -206,8 +185,6 @@ impl PackageResolver {
       ]
     ).await?;
 
-    let _: () = connection.set(&format!("package_{}", package_id), package_raw).await?;
-
     Ok(())
   }
 
@@ -216,8 +193,6 @@ impl PackageResolver {
     packages: Vec<(MovePackage, Option<TransactionDigest>)>
   ) -> Result<()> {
     let pg_client = provider.pg_client();
-    let redis_client = provider.redis_client();
-    let mut connection = redis_client.get_multiplexed_tokio_connection().await?;
 
     const BATCH_SIZE: usize = 1000;
     for chunk in packages.chunks(BATCH_SIZE) {
@@ -268,8 +243,6 @@ impl PackageResolver {
         pipe.set(id, value);
         pipe.set(virtual_id, value);
       });
-
-      let _: () = pipe.query_async(&mut connection).await?;
     }
 
     Ok(())
@@ -315,24 +288,6 @@ impl PackageResolver {
     }
 
     let pg_client = provider.pg_client();
-    let redis_client = provider.redis_client();
-
-    let redis_key = format!("display_{}", move_struct_type);
-    let display_raw_res: Result<String, _> = redis_client
-      .get_multiplexed_tokio_connection().await?
-      .get(&redis_key).await;
-
-    if let Ok(display_raw) = display_raw_res {
-      let display_opt: Result<StoredDisplay, _> = serde_json::from_str(&display_raw);
-
-      if let Ok(d) = display_opt {
-        display = Some(d);
-      }
-    }
-
-    if display.is_some() {
-      return Ok(display);
-    }
 
     let display_raw_res = pg_client.query_one(
       "SELECT fields, version FROM displays WHERE object_type ORDER BY version DESC",
@@ -356,8 +311,7 @@ impl PackageResolver {
     displays: Vec<(StoredDisplay, Option<TransactionDigest>)>
   ) -> Result<()> {
     let pg_client = provider.pg_client();
-    let redis_client = provider.redis_client();
-    let mut connection = redis_client.get_multiplexed_tokio_connection().await?;
+
     let display_values: Vec<(String, Arc<StoredDisplay>)> = displays
       .iter()
       .map(|d| {
@@ -416,7 +370,6 @@ impl PackageResolver {
         pipe.set(id, value);
       });
 
-      let _: () = pipe.query_async(&mut connection).await?;
       provider.set_displays(display_values.clone()).await;
     }
 
