@@ -16,7 +16,7 @@ jobs:
   build_binary:
     runs-on: ubuntu-latest
     container:
-      image: registry.hub.docker.com/dainqdev/rust-ci:latest
+      image: hatembt/rust-ci:latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
