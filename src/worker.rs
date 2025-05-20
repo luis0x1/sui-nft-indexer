@@ -47,6 +47,7 @@ pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
             loop {
               let tasks_read = all_task_clone.read().await;
               if tasks_read.len() == 0 {
+                drop(tasks_read);
                 continue;
               }
 
@@ -57,7 +58,12 @@ pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
               drop(tasks_locked);
 
               if let Some(task) = task_taked {
-                process_task(&provider_clone, connection, Arc::new(task)).await;
+                process_task(
+                  &provider_clone,
+                  connection,
+                  Arc::clone(&all_task_clone),
+                  Arc::new(task)
+                ).await;
               }
               thread::sleep(Duration::from_millis(10));
             }
@@ -96,7 +102,7 @@ async fn init_task(redis_client: &Arc<RedisClient>) -> Result<VecDeque<Task>> {
       if items.len() > 0 {
         let message: Result<Message, _> = serde_json::from_str(&items[0]);
         if message.is_ok() {
-          tasks.push_back(Task { key: message_key, payload: message.unwrap() });
+          tasks.push_back(Task { key: message_key, payload: message.unwrap(), retry_count: 0 });
         } else {
           println!("messages error: {:?}", message.unwrap_err());
         }
@@ -177,14 +183,15 @@ async fn on_message(
 async fn process_task(
   provider: &Arc<AppProvider>,
   redis_connection: &mut MultiplexedConnection,
+  all_tasks: Arc<RwLock<VecDeque<Task>>>,
   task: Arc<Task>
 ) {
-  let res = _process_task(provider, redis_connection, &task).await;
+  let res = _process_task(provider, redis_connection, all_tasks, &task).await;
 
   match res {
     Ok(task_type) =>
       println!(
-        "process task [{}]{} successfully in thread: {:?}",
+        "process task [{}] {} successfully in thread: {:?}",
         task_type,
         task.key,
         thread::current().id()
@@ -196,21 +203,33 @@ async fn process_task(
 async fn _process_task(
   provider: &Arc<AppProvider>,
   redis_connection: &mut MultiplexedConnection,
+  all_tasks: Arc<RwLock<VecDeque<Task>>>,
   task: &Task
 ) -> Result<String> {
   let task_type: String;
 
-  match task.payload.content.clone() {
+  let res = match task.payload.content.clone() {
     MessageContent::SaveObjects(job) => {
-      SaveObjectsJob::handle(provider, job).await?;
       task_type = "SaveObjectsJob".to_string();
+      SaveObjectsJob::handle(provider, job).await
     }
     MessageContent::ParseObjectsFields(job) => {
-      ParseObjectsFieldsJob::handle(provider, job).await?;
       task_type = "ParseObjectsFields".to_string();
+      ParseObjectsFieldsJob::handle(provider, job).await
     }
     _ => {
       return Err(Error::msg("Job is not support"));
+    }
+  };
+
+  if let Err(error) = res {
+    if let Some(new_task) = task.next_retry() {
+      let mut tasks_locked = all_tasks.write().await;
+      tasks_locked.push_back(new_task);
+      drop(tasks_locked);
+    } else {
+      let _: () = redis_connection.del(&task.key).await?;
+      return Err(error);
     }
   }
 

@@ -35,6 +35,7 @@ model Object {
   @@index([owner])
   @@index([type])
   @@index([owner, type])
+  @@index([status])
   @@index([updatedAt(sort: Desc)])
   @@index([id, version(sort: Desc)])
   @@map("objects")
@@ -76,4 +77,11 @@ model Display {
 
   @@index([object_type, version(sort: Desc)])
   @@map("displays")
+}
+
+model BlacklistStruct {
+  id           Int      @default(autoincrement())
+  object_type  String   @unique
+
+  @@map("blacklist_struct")
 }

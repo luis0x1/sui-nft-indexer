@@ -2,7 +2,7 @@ extern crate dotenv;
 
 use anyhow::{ Ok, Result };
 use env::{ get_env, init_env, AppType };
-use library::package_resolve::PackageResolver;
+use library::blacklist_resolver::BlacklistResolver;
 use sui_data_ingestion_core::setup_single_workflow;
 use scan_worker::{AppProvider, IndexerWorker};
 use worker::setup_worker_flow;
@@ -14,6 +14,7 @@ pub mod env;
 pub mod scan_worker;
 pub mod queue;
 pub mod worker;
+pub mod constants;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -44,7 +45,9 @@ async fn main() -> Result<()> {
     }
     AppType::Test => {
       let provider = AppProvider::init().await?;
-      PackageResolver::get_package(&provider, "0x2a45cae4986125fc8872a054398b3c9a80201e61f75a011af48f2af0edea66ec", false).await?;
+      let res = BlacklistResolver::set_blacklist(&provider, "object_type", true).await;
+
+      println!("res: {:?}", res);
     }
   }
 

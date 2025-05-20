@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sui_types::{ base_types::SuiAddress, object::Data };
 
-use crate::{ env::get_env, scan_worker::AppProvider, transaction::SuiObject };
+use crate::{ constants::{is_in_blocklist}, scan_worker::AppProvider, transaction::SuiObject };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
@@ -33,9 +33,8 @@ pub struct WormNftContent {
 }
 
 pub fn is_valid_object(object_type: String) -> bool {
-  let worm_nft_type = get_env().worm_nft_type;
-  if object_type == worm_nft_type {
-    return true;
+  if is_in_blocklist(&object_type) {
+    return false;
   }
 
   true
@@ -75,10 +74,7 @@ fn parse_vector_to_sql(data: &Vec<u8>) -> String {
   format!("{:?}", data)
 }
 
-pub async fn insert_objects(
-  provider: &AppProvider,
-  objects: Vec<SuiObject>
-) -> Result<()> {
+pub async fn insert_objects(provider: &AppProvider, objects: Vec<SuiObject>) -> Result<()> {
   // Process objects in batches to avoid huge SQL queries
   const BATCH_SIZE: usize = 1000;
 
@@ -89,7 +85,7 @@ pub async fn insert_objects(
       .iter()
       .map(|object| {
         format!(
-          r#"('{}', '{}', {}, '{}'::"ObjectStatus", '{}', '{}'::jsonb, '{}'::jsonb, '{}'::bigint, '{}'::timestamp, '{}'::timestamp)"#,
+          r#"('{}', '{}', {}, '{}'::"ObjectStatus", '{}', $${}$$::jsonb, $${}$$::jsonb, '{}'::bigint, '{}'::timestamp, '{}'::timestamp)"#,
           object.id(),
           object.owner(),
           parse_object_type_to_sql(object),
@@ -105,8 +101,8 @@ pub async fn insert_objects(
       .collect::<Vec<String>>()
       .join(",");
 
-    let query =
-      format!(r#"
+    let query = format!(
+      r#"
       INSERT INTO objects (id, owner, type, status, field_raw, fields, display, version, updated_at, created_at)
       VALUES {}
       ON CONFLICT (id)
@@ -119,7 +115,11 @@ pub async fn insert_objects(
           version = EXCLUDED.version,
           updated_at = EXCLUDED.updated_at
       WHERE objects.updated_at < EXCLUDED.updated_at
-      "#, values, "{}", "{}");
+      "#,
+      values,
+      "{}",
+      "{}"
+    );
 
     pg_client.query(query.as_str(), &[]).await?;
   }
@@ -132,23 +132,24 @@ pub struct UpdateObjectArgs {
   pub version: u64,
   pub fields: String,
   pub display: String,
+  pub is_remove: bool,
 }
 
-pub async fn update_object_fields(
-  provider: &AppProvider,
-  args: UpdateObjectArgs
-) -> Result<()> {
+pub async fn update_object_fields(provider: &AppProvider, args: UpdateObjectArgs) -> Result<()> {
   let pg_client = &provider.pg_client;
-  let query =
-    r#"UPDATE objects
+
+  if args.is_remove {
+    let query = r#"DELETE FROM objects
+        WHERE id = $1"#;
+    pg_client.query(query, &[&args.id]).await?;
+  } else {
+    let query =
+      r#"UPDATE objects
       SET fields = $3::jsonb,
           display = $4::jsonb
       WHERE id = $1 AND version = $2"#;
-
-  pg_client.query(
-    query,
-    &[&args.id, &(args.version as i64), &args.fields, &args.display]
-  ).await?;
+    pg_client.query(query, &[&args.id, &(args.version as i64), &args.fields, &args.display]).await?;
+  }
 
   Ok(())
 }
@@ -161,27 +162,44 @@ pub async fn update_objects_fields(
   let pg_client = &provider.pg_client;
 
   for chunk in args.chunks(BATCH_SIZE) {
-    let values = chunk
-      .iter()
-      .map(|object| {
-        format!(
-          r#"('{}', '{}'::bigint, '{}'::jsonb, '{}'::jsonb)"#,
-          object.id,
-          object.version,
-          object.fields,
-          object.display
-        )
-      })
-      .collect::<Vec<String>>()
-      .join(",");
+    let update_objects = chunk.iter().filter(|o| !o.is_remove);
+    let remove_objects = chunk.iter().filter(|o| o.is_remove);
 
-    let query = format!(r#"UPDATE objects
+    let _updating_object = {
+      let values = update_objects
+        .map(|object| {
+          format!(
+            r#"('{}', '{}'::bigint, $${}$$::jsonb, $${}$$::jsonb)"#,
+            object.id,
+            object.version,
+            object.fields,
+            object.display
+          )
+        })
+        .collect::<Vec<String>>();
+
+      if values.len() > 0 {
+        let query = format!(
+          r#"UPDATE objects
           SET fields = v.fields,
               display = v.display
           FROM (VALUES {}) v(id, version, fields, display)
-          WHERE objects.id = v.id AND objects.version = v.version"#, values);
+          WHERE objects.id = v.id AND objects.version = v.version"#,
+          values.join(",")
+        );
 
-    pg_client.query(query.as_str(), &[]).await?;
+        pg_client.query(query.as_str(), &[]).await?;
+      }
+    };
+
+    let _removing_object = {
+      let values = remove_objects.map(|object| object.id.as_str()).collect::<Vec<&str>>();
+
+      if values.len() > 0 {
+        pg_client.query(r#"DELETE FROM objects
+        WHERE id = ANY($1)"#, &[&values]).await?;
+      }
+    };
   }
 
   Ok(())

@@ -1,13 +1,17 @@
 use std::{ collections::VecDeque, str::FromStr, sync::Arc, thread, time::Duration };
 
 use crate::{
-  library::{ package_resolve::PackageResolver, struct_resolver::StructResolver },
+  library::{
+    blacklist_resolver::BlacklistResolver,
+    object::{ is_valid_object, update_objects_fields, UpdateObjectArgs },
+    package_resolve::PackageResolver,
+    struct_resolver::StructResolver,
+  },
   scan_worker::AppProvider,
-  library::object::{ is_valid_object, update_objects_fields, UpdateObjectArgs },
 };
 
-use super::base_job::{ BaseJob, MessageContent, Task };
-use anyhow::{ Error, Result };
+use super::{ base_job::{ BaseJob, MessageContent, Task }, save_object_job::move_struct_to_content };
+use anyhow::{ anyhow, Error, Result };
 use async_trait::async_trait;
 use move_core_types::language_storage::StructTag;
 use serde::{ Deserialize, Serialize };
@@ -33,11 +37,17 @@ impl BaseJob<ParseObjectsFieldsJobPayload> for ParseObjectsFieldsJob {
       if let Data::Move(move_object) = object.data.clone() {
         let object_type = object.type_().map(|v| v.to_string());
 
-        if let Some(ref type_str) = object_type {
-          if !is_valid_object(type_str.clone()) {
-            continue;
-          }
+        let Some(ref type_str) = object_type else {
+          return Err(anyhow!("Object not has struct type"));
+        };
+
+        if
+          !is_valid_object(type_str.clone()) ||
+          BlacklistResolver::is_blacklist(provider, type_str).await
+        {
+          continue;
         }
+
         let move_struct_type = &move_object.type_().to_string();
         let struct_tag_res: Result<StructTag, _> = StructTag::from_str(&move_struct_type);
         let mut content = None;
@@ -53,22 +63,25 @@ impl BaseJob<ParseObjectsFieldsJobPayload> for ParseObjectsFieldsJob {
 
           if let Ok(data) = res {
             if let MoveTypeLayout::Struct(layout) = data.0 {
-              let data = object.data.try_as_move().unwrap().to_move_struct(layout.as_ref());
-              match data {
-                Ok(d) => {
-                  content = Some(serde_json::to_string(&d).unwrap());
+              if let Some(move_object) = object.data.try_as_move() {
+                let data = move_object.to_move_struct(layout.as_ref());
+                match data {
+                  Ok(d) => {
+                    let content_parsed = move_struct_to_content(move_object, d.clone());
+                    content = Some(serde_json::to_string(&content_parsed.fields).unwrap());
 
-                  if
-                    let Ok(display_template) = PackageResolver::get_display(
-                      provider,
-                      &move_struct_type,
-                      &d
-                    ).await
-                  {
-                    display = Some(display_template);
+                    if
+                      let Ok(display_template) = PackageResolver::get_display(
+                        provider,
+                        &move_struct_type,
+                        &d
+                      ).await
+                    {
+                      display = Some(display_template);
+                    }
                   }
+                  _ => {}
                 }
-                _ => {}
               }
             }
           } else {
@@ -81,16 +94,21 @@ impl BaseJob<ParseObjectsFieldsJobPayload> for ParseObjectsFieldsJob {
           }
         }
 
+        let is_remove = display.is_none();
+        let _ = BlacklistResolver::set_blacklist(provider, type_str, is_remove).await;
+
         objects.push(UpdateObjectArgs {
           id: object.id().to_string(),
           version: object.version().value(),
           display: display.unwrap_or("{}".to_string()),
           fields: content.unwrap_or("{}".to_string()),
+          is_remove,
         });
       }
     }
-
-    update_objects_fields(provider, objects).await?;
+    if objects.len() > 0 {
+      update_objects_fields(provider, objects).await?;
+    }
 
     Ok(())
   }

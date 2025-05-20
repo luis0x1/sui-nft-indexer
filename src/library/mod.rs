@@ -8,3 +8,4 @@ pub mod struct_resolver;
 pub mod object_wrapper;
 pub mod pg;
 pub mod object;
+pub mod blacklist_resolver;

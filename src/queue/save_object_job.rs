@@ -2,14 +2,15 @@ use std::{ collections::VecDeque, str::FromStr, sync::Arc };
 
 use crate::{
   library::{
+    blacklist_resolver::BlacklistResolver,
     display::StoredDisplay,
+    object::{ get_object_content_bytes, insert_objects, is_valid_object },
     package_resolve::PackageResolver,
     struct_resolver::StructResolver,
-    object::{ get_object_content_bytes, insert_objects, is_valid_object },
   },
   scan_worker::AppProvider,
   transaction::{ SuiObject, TransactionObject },
-  utils::{ error::OBJECT_NOT_FOUND_LOCAL },
+  utils::error::OBJECT_NOT_FOUND_LOCAL,
 };
 
 use super::{
@@ -18,13 +19,13 @@ use super::{
 };
 use anyhow::{ Error, Result };
 use async_trait::async_trait;
-use move_core_types::language_storage::StructTag;
+use move_core_types::{ annotated_value::MoveStruct, language_storage::StructTag };
 use serde::{ Deserialize, Serialize };
-use sui_sdk::json::MoveTypeLayout;
+use sui_sdk::{ json::MoveTypeLayout, rpc_types::{ SuiMoveStruct, SuiParsedMoveObject } };
 use sui_types::{
   digests::TransactionDigest,
   move_package::MovePackage,
-  object::{ Data, Object, Owner },
+  object::{ Data, MoveObject, Object, Owner },
   TypeTag,
 };
 use tokio::sync::RwLock;
@@ -67,7 +68,10 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
             let object_type = object.type_().map(|v| v.to_string());
 
             if let Some(ref type_str) = object_type {
-              if !is_valid_object(type_str.clone()) {
+              if
+                !is_valid_object(type_str.clone()) ||
+                BlacklistResolver::is_blacklist(provider, type_str).await
+              {
                 continue;
               }
             }
@@ -87,22 +91,25 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
 
               if let Ok(data) = res {
                 if let MoveTypeLayout::Struct(layout) = data.0 {
-                  let data = object.data.try_as_move().unwrap().to_move_struct(layout.as_ref());
-                  match data {
-                    Ok(d) => {
-                      content = Some(serde_json::to_string(&d).unwrap());
+                  if let Some(move_object) = object.data.try_as_move() {
+                    let data = move_object.to_move_struct(layout.as_ref());
+                    match data {
+                      Ok(layout) => {
+                        let content_parsed = move_struct_to_content(move_object, layout.clone());
+                        content = Some(serde_json::to_string(&content_parsed.fields).unwrap());
 
-                      if
-                        let Ok(display_template) = PackageResolver::get_display(
-                          provider,
-                          &move_struct_type,
-                          &d
-                        ).await
-                      {
-                        display = Some(display_template);
+                        if
+                          let Ok(display_template) = PackageResolver::get_display(
+                            provider,
+                            &move_struct_type,
+                            &layout
+                          ).await
+                        {
+                          display = Some(display_template);
+                        }
                       }
+                      _ => {}
                     }
-                    _ => {}
                   }
                 }
               } else {
@@ -122,17 +129,19 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
               }
             }
 
-            objects.push(SuiObject {
-              id: object.id().to_string(),
-              owner: get_object_owner_address(&object),
-              object_type,
-              status: detail.status,
-              updated_at: detail.confirmed_timestamp,
-              content_bytes,
-              content,
-              display,
-              version: object.version().to_string(),
-            });
+            if (content.is_none() && display.is_none()) || (content.is_some() && display.is_some()) {
+              objects.push(SuiObject {
+                id: object.id().to_string(),
+                owner: get_object_owner_address(&object),
+                object_type,
+                status: detail.status,
+                updated_at: detail.confirmed_timestamp,
+                content_bytes,
+                content,
+                display,
+                version: object.version().to_string(),
+              });
+            }
           }
         }
         _ => {}
@@ -195,6 +204,23 @@ fn get_object_owner_address(object: &Object) -> String {
     Owner::Shared { initial_shared_version } => format!("Shared({})", initial_shared_version),
     Owner::ConsensusV2 { start_version: _, authenticator } => {
       authenticator.as_single_owner().to_string()
+    }
+  }
+}
+
+pub fn move_struct_to_content(object: &MoveObject, move_struct: MoveStruct) -> SuiParsedMoveObject {
+  let sui_move_struct = move_struct.into();
+  if let SuiMoveStruct::WithTypes { type_, fields } = sui_move_struct {
+    SuiParsedMoveObject {
+      type_,
+      has_public_transfer: object.has_public_transfer(),
+      fields: SuiMoveStruct::WithFields(fields),
+    }
+  } else {
+    SuiParsedMoveObject {
+      type_: object.type_().clone().into(),
+      has_public_transfer: object.has_public_transfer(),
+      fields: sui_move_struct,
     }
   }
 }

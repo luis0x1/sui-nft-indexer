@@ -50,7 +50,8 @@ impl SuiClientProvider {
           let error_str = err.to_string();
           if
             error_str.contains("Request rejected `429`") ||
-            error_str.contains("Can't assign requested address (os error 49)")
+            error_str.contains("Can't assign requested address (os error 49)") ||
+            error_str.contains("Operation timed out")
           {
             println!("call blockchain error try next rpc: {index} -> {:?}", err);
             index += 1;

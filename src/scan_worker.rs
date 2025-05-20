@@ -11,7 +11,10 @@ use reqwest::Client as HttpClient;
 use crate::{
   env::get_env,
   library::{
-    display::StoredDisplay, object_wrapper::DataDefWrapper, pg::get_postgres_connection, sui_client::SuiClientProvider
+    display::StoredDisplay,
+    object_wrapper::DataDefWrapper,
+    pg::get_postgres_connection,
+    sui_client::SuiClientProvider,
   },
   queue::{
     base_job::{ BaseJob, MessageContent },
@@ -24,6 +27,7 @@ use crate::{
 pub struct AppState {
   pub datatypes: BTreeMapLimit<String, Arc<DataDefWrapper>>,
   pub displays: BTreeMapLimit<String, Arc<StoredDisplay>>,
+  pub blacklist_structs: BTreeMapLimit<String, bool>,
 }
 
 pub struct AppProvider {
@@ -55,6 +59,7 @@ impl AppProvider {
         Mutex::new(AppState {
           datatypes: BTreeMapLimit::new(1000_000),
           displays: BTreeMapLimit::new(1000_000),
+          blacklist_structs: BTreeMapLimit::new(1000_000),
         })
       ),
     })
@@ -76,6 +81,34 @@ impl AppProvider {
     let datatypes = MutexGuard::map(self.state.lock().await, |state| &mut state.datatypes);
 
     datatypes.get(key).map(|d| d.clone())
+  }
+
+  pub async fn is_blacklist(&self, key: &str) -> Option<bool> {
+    let blacklist_structs = MutexGuard::map(
+      self.state.lock().await,
+      |state| &mut state.blacklist_structs
+    );
+
+    if blacklist_structs.contains_key(key) {
+      return Some(*blacklist_structs.get(key).unwrap());
+    }
+
+    None
+  }
+
+  pub async fn set_blacklist(&self, key: &str, is_blacklist: bool) -> Option<bool> {
+    let mut blacklist_structs = MutexGuard::map(
+      self.state.lock().await,
+      |state| &mut state.blacklist_structs
+    );
+
+    if blacklist_structs.contains_key(key) {
+      return Some(*blacklist_structs.get(key).unwrap());
+    }
+
+    (*blacklist_structs).insert(key.to_string(), is_blacklist);
+
+    None
   }
 
   pub async fn get_display(&self, key: &str) -> Option<Arc<StoredDisplay>> {

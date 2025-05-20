@@ -10,10 +10,11 @@ RUN apt-get update && apt-get install -y cmake clang
 RUN apt-get update
 
 WORKDIR /app
-COPY Cargo.toml Cargo.lock .
+COPY ./Cargo.toml ./Cargo.toml 
+COPY ./Cargo.lock ./Cargo.lock 
 RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN --mount=type=cache,target=/usr/local/cargo/registry cargo build  --release
-
+RUN cargo build  --release
+RUN rm -f target/release/deps/birds-indexer*
 RUN rm -rf ./src
 COPY ./src ./src
 

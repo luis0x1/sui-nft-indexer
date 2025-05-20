@@ -7,7 +7,7 @@ use serde::{ Deserialize, Serialize };
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use reqwest::Client as HttpClient;
-use crate::{ env::{get_env, AppType}, scan_worker::AppProvider };
+use crate::{ env::{ get_env, AppType }, scan_worker::AppProvider };
 
 use super::{
   parse_object_fields_job::ParseObjectsFieldsJobPayload,
@@ -39,11 +39,28 @@ pub struct PubSubMessage {
 pub struct Task {
   pub key: String,
   pub payload: Message,
+  pub retry_count: u8,
+}
+
+impl Task {
+    pub fn next_retry(&self) -> Option<Self> {
+      if self.retry_count >= 3 {
+        return None;
+      }
+
+      let mut new_task = self.clone();
+      new_task.retry_count += 1;
+      Some(new_task)
+    }
 }
 
 impl From<Message> for Task {
   fn from(message: Message) -> Self {
-    Self { key: format!("{}:message:{}", get_env().channel_id, message.id), payload: message }
+    Self {
+      key: format!("{}:message:{}", get_env().channel_id, message.id),
+      payload: message,
+      retry_count: 0,
+    }
   }
 }
 
@@ -97,10 +114,7 @@ pub trait BaseJob<T> {
       worker_url = format!("http://{}/message", worker_url);
     }
 
-    let send_notification = http_client
-      .post(worker_url)
-      .json(&pubsub_message)
-      .send().await;
+    let send_notification = http_client.post(worker_url).json(&pubsub_message).send().await;
 
     match send_notification {
       Err(e) => eprintln!("Cannot send notification to worker: {:?}", e),
