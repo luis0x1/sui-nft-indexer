@@ -32,11 +32,7 @@ impl BlacklistResolver {
     object_type: &str,
     is_blacklist: bool
   ) -> Result<()> {
-    let res = provider.set_blacklist(object_type, is_blacklist).await;
-
-    if res.is_some() {
-      return Ok(());
-    }
+    provider.set_blacklist(object_type, is_blacklist).await;
 
     if is_blacklist {
       let pg_client = provider.pg_client();

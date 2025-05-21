@@ -96,7 +96,7 @@ impl BaseJob<ParseObjectsFieldsJobPayload> for ParseObjectsFieldsJob {
 
         let is_remove = display.is_none();
         let _ = BlacklistResolver::set_blacklist(provider, type_str, is_remove).await;
-
+        // println!("res =====> {} -> {:?} -> {:?}", type_str, is_remove, res);
         objects.push(UpdateObjectArgs {
           id: object.id().to_string(),
           version: object.version().value(),

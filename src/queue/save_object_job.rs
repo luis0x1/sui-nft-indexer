@@ -129,6 +129,13 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
               }
             }
 
+            if
+              object.id().to_string() ==
+              "0x15a9b5d245548e4495aad55383414c9247145aa1ac266f271ed703e4bbc8f51d"
+            {
+              println!("==========================> {:?} {:?}", content, display);
+            }
+
             if (content.is_none() && display.is_none()) || (content.is_some() && display.is_some()) {
               objects.push(SuiObject {
                 id: object.id().to_string(),

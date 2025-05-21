@@ -19,7 +19,7 @@ use sui_types::{
   id::UID,
   move_package::MovePackage,
 };
-use crate::{scan_worker::AppProvider, utils::error::OBJECT_NOT_FOUND_LOCAL};
+use crate::{ scan_worker::AppProvider, utils::error::OBJECT_NOT_FOUND_LOCAL };
 
 use super::{ display::{ StoredDisplay }, sui_client::SuiClientProvider };
 
@@ -205,21 +205,17 @@ impl PackageResolver {
           };
           let serializer = serde_json::to_string(package).unwrap();
           let virtual_id = package.original_package_id();
-          (
-            format!("package_{}", package.id().to_string()),
-            virtual_id.to_string(),
-            serializer.clone(),
-            format!(
-              r#"('{}', '{}', '{}', '{}', {}, NOW(), NOW())"#,
-              package.id(),
-              virtual_id,
-              serializer,
-              u64::from(package.version()) as i64,
-              tx
-            ),
+
+          format!(
+            r#"('{}', '{}', $${}$$, '{}', {}, NOW(), NOW())"#,
+            package.id(),
+            virtual_id,
+            serializer,
+            u64::from(package.version()) as i64,
+            tx
           )
         })
-        .collect::<Vec<(String, String, String, String)>>();
+        .collect::<Vec<String>>();
 
       pg_client.query(
         &format!(
@@ -228,21 +224,10 @@ impl PackageResolver {
         ON CONFLICT (id)
         DO UPDATE 
           SET serialized = EXCLUDED.serialized",
-          values
-            .iter()
-            .map(|(_, __, ___, v)| v.to_string())
-            .collect::<Vec<String>>()
-            .join(",")
+          values.join(",")
         ),
         &[]
       ).await?;
-
-      let mut pipe = redis::pipe();
-      pipe.atomic();
-      values.iter().for_each(|(id, virtual_id, value, _)| {
-        pipe.set(id, value);
-        pipe.set(virtual_id, value);
-      });
     }
 
     Ok(())
@@ -290,7 +275,7 @@ impl PackageResolver {
     let pg_client = provider.pg_client();
 
     let display_raw_res = pg_client.query_one(
-      "SELECT fields, version FROM displays WHERE object_type ORDER BY version DESC",
+      "SELECT fields::TEXT, version FROM displays WHERE object_type = $1 ORDER BY version DESC",
       &[&move_struct_type]
     ).await;
 
@@ -331,20 +316,16 @@ impl PackageResolver {
           };
           let fields = serde_json::to_string(display).unwrap();
 
-          (
-            format!("display_{}", display.object_type),
-            fields.clone(),
-            format!(
-              r#"('{}', '{}'::text, '{}'::jsonb, '{}', {}, NOW(), NOW())"#,
-              display.object_type,
-              &format!("{:?}", display.bcs),
-              fields,
-              display.version,
-              tx
-            ),
+          format!(
+            r#"('{}', '{}'::text, $${}$$::jsonb, '{}', {}, NOW(), NOW())"#,
+            display.object_type,
+            "[]",
+            fields,
+            display.version,
+            tx
           )
         })
-        .collect::<Vec<(String, String, String)>>();
+        .collect::<Vec<String>>();
 
       pg_client.query(
         &format!(
@@ -355,20 +336,10 @@ impl PackageResolver {
           SET fields = EXCLUDED.fields,
             version = EXCLUDED.version
         WHERE displays.version < EXCLUDED.version",
-          values
-            .iter()
-            .map(|(_, __, v)| v.to_string())
-            .collect::<Vec<String>>()
-            .join(",")
+          values.join(",")
         ),
         &[]
       ).await?;
-
-      let mut pipe = redis::pipe();
-      pipe.atomic();
-      values.iter().for_each(|(id, value, _)| {
-        pipe.set(id, value);
-      });
 
       provider.set_displays(display_values.clone()).await;
     }

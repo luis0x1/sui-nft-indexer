@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sui_types::{ base_types::SuiAddress, object::Data };
 
-use crate::{ constants::{ is_in_blocklist }, scan_worker::AppProvider, transaction::SuiObject };
+use crate::{ scan_worker::AppProvider, transaction::SuiObject };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
@@ -32,10 +32,10 @@ pub struct WormNftContent {
   value: u64,
 }
 
-pub fn is_valid_object(object_type: String) -> bool {
-  if is_in_blocklist(&object_type) {
-    return false;
-  }
+pub fn is_valid_object(_object_type: String) -> bool {
+  // if is_in_blocklist(&object_type) {
+  //   return false;
+  // }
 
   true
 }
@@ -165,7 +165,7 @@ pub async fn update_objects_fields(
     let remove_objects = chunk.iter().filter(|o| o.is_remove);
 
     let _updating_object = {
-      let values = update_objects
+      let values = update_objects.clone()
         .map(|object| {
           format!(
             r#"('{}', '{}'::bigint, $${}$$::jsonb, $${}$$::jsonb)"#,
@@ -192,7 +192,7 @@ pub async fn update_objects_fields(
     };
 
     let _removing_object = {
-      let values = remove_objects.map(|object| object.id.as_str()).collect::<Vec<&str>>();
+      let values = remove_objects.clone().map(|object| object.id.as_str()).collect::<Vec<&str>>();
 
       if values.len() > 0 {
         pg_client.query(r#"DELETE FROM objects
