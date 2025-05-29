@@ -326,10 +326,21 @@ impl IndexerWorker {
 
     let initital_checkpoint = unsafe { CURRENT_CHECKPOINT };
     let performance_task = tokio::spawn(async {
+      let mut cancel_process = 0;
       loop {
         thread::sleep(Duration::from_secs(10));
         unsafe {
+          if cancel_process >= 2 {
+            // kill process if cannot fetch checkpoint
+            std::process::exit(1);
+          }
+
           let range = CURRENT_CHECKPOINT - LAST_CHECKED;
+          if range <= 0 {
+            cancel_process += 1;
+          } else {
+            cancel_process = 0;
+          }
           LAST_CHECKED = CURRENT_CHECKPOINT;
           println!("---------------------------------------------------------");
           println!("scaned {} checkpoint after 10s", range);
