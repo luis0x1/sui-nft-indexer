@@ -3,7 +3,7 @@ use std::{ str::FromStr, sync::{ Arc, LazyLock, Mutex } };
 use anyhow::{ Result, Error };
 use serde::{ Deserialize, Serialize };
 
-use crate::string;
+use crate::{string, utils::none_zero_u64::NoneZeroU64};
 
 #[derive(Clone, Debug)]
 pub struct EnvValue {
@@ -14,6 +14,7 @@ pub struct EnvValue {
   pub redis_url: String,
   pub worker_url: String,
   pub use_latest_checkpoint: bool,
+  pub start_checkpoint: NoneZeroU64,
   pub concurrency: usize,
   pub disable_ssl: bool,
 }
@@ -24,6 +25,7 @@ pub enum AppType {
   Scan = 1,
   Worker = 2,
   Test = 3,
+  ReScan = 4,
 }
 
 impl FromStr for AppType {
@@ -34,6 +36,7 @@ impl FromStr for AppType {
       "1" => AppType::Scan,
       "2" => AppType::Worker,
       "3" => AppType::Test,
+      "4" => AppType::ReScan,
       _ => AppType::Scan,
     })
   }
@@ -50,6 +53,7 @@ static ENV: LazyLock<Arc<Mutex<EnvValue>>> = LazyLock::new(|| {
       worker_url: "".to_string(),
       use_latest_checkpoint: false,
       concurrency: 1,
+      start_checkpoint: NoneZeroU64::default(),
       disable_ssl: true,
     })
   )
@@ -72,7 +76,9 @@ pub fn init_env() {
   env.worker_url = load_env("WORKER_URL", string!("http://127.0.0.1:2811"));
   env.use_latest_checkpoint = load_env("USE_LATEST_CHECKPOINT", false);
   env.concurrency = load_env("CONCURRENCY", 1);
+  env.concurrency = load_env("CONCURRENCY", 1);
   env.disable_ssl = load_env("DISABLE_SSL", true);
+  env.start_checkpoint = load_env("START_CHECKPOINT", NoneZeroU64::default());
 }
 
 fn load_env<T>(key: &str, default: T) -> T where T: FromStr + Clone {

@@ -2,10 +2,15 @@ extern crate dotenv;
 
 use anyhow::{ Ok, Result };
 use env::{ get_env, init_env, AppType };
-use library::blacklist_resolver::BlacklistResolver;
-use sui_data_ingestion_core::setup_single_workflow;
-use scan_worker::{AppProvider, IndexerWorker};
+use library::checkpoint::setup_scan_flow;
+use scan_worker::IndexerWorker;
 use worker::setup_worker_flow;
+
+use crate::{
+  library::rescan_checkpoint::setup_rescan_flow,
+  queue::{ base_job::BaseJob, handle_failed_checkpoint_job::{ HandleFailedCheckpointJob } },
+  scan_worker::AppProvider,
+};
 
 pub mod library;
 pub mod transaction;
@@ -29,27 +34,52 @@ async fn main() -> Result<()> {
     AppType::Scan => {
       let (worker, initital_checkpoint, performance_task) = IndexerWorker::init().await?;
       println!("init done");
-      let (executor, _term_sender) = setup_single_workflow(
+      setup_scan_flow(
         worker,
-        "https://checkpoints.mainnet.sui.io".to_string(),
         initital_checkpoint /* initial checkpoint number */,
-        env_var.concurrency /* concurrency */,
-        None /* extra reader options */
+        env_var.concurrency /* concurrency */
       ).await?;
 
-      executor.await?;
+      performance_task.abort();
+    }
+    AppType::ReScan => {
+      let (worker, initital_checkpoint, performance_task) = IndexerWorker::init().await?;
+      println!("init done: {}", initital_checkpoint);
+      setup_rescan_flow(
+        worker,
+        initital_checkpoint /* initial checkpoint number */,
+        env_var.concurrency /* concurrency */
+      ).await?;
+
       performance_task.abort();
     }
     AppType::Worker => {
       setup_worker_flow(env_var.concurrency as u8).await?;
     }
     AppType::Test => {
-      let provider = AppProvider::init().await?;
-      let res = BlacklistResolver::set_blacklist(&provider, "object_type", true).await;
-
-      println!("res: {:?}", res);
+      let provider = &AppProvider::init().await?;
+      HandleFailedCheckpointJob::handle(provider, HandleFailedCheckpointJob(151129784)).await?;
     }
   }
 
   Ok(())
 }
+
+// async fn get_checkpoint(http_client: Arc<reqwest::Client>, checkpoint_seq: u64) {
+//   let start = SystemTime::now();
+//   let bytes = http_client
+//     .get(format!("https://checkpoints.mainnet.sui.io/{}.chk", checkpoint_seq))
+//     .send().await
+//     .unwrap()
+//     .bytes().await
+//     .unwrap();
+//   let done_api = SystemTime::now();
+//   let checkpoint: Result<CheckpointData, _> = bcs::from_bytes(&bytes[1..]);
+//   let end = SystemTime::now();
+//   println!(
+//     "res: {:?} -> {:?} -> {:?}",
+//     checkpoint.map(|cp| cp.checkpoint_summary.sequence_number),
+//     done_api.duration_since(start),
+//     end.duration_since(done_api)
+//   );
+// }

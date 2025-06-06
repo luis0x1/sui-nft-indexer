@@ -19,16 +19,24 @@ use sui_sdk::json::MoveTypeLayout;
 use sui_types::{ object::{ Data, Object }, TypeTag };
 use tokio::sync::RwLock;
 
-pub struct ParseObjectsFieldsJob;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParseObjectsFieldsJobPayload {
+pub struct ParseObjectsFieldsJob {
   pub objects: String,
 }
 
+impl TryFrom<Vec<Object>> for ParseObjectsFieldsJob {
+  type Error = Error;
+
+  fn try_from(value: Vec<Object>) -> std::result::Result<Self, Self::Error> {
+    Ok(Self {
+      objects: serde_json::to_string(&value)?,
+    })
+  }
+}
+
 #[async_trait]
-impl BaseJob<ParseObjectsFieldsJobPayload> for ParseObjectsFieldsJob {
-  async fn handle(provider: &AppProvider, job: ParseObjectsFieldsJobPayload) -> anyhow::Result<()> {
+impl BaseJob for ParseObjectsFieldsJob {
+  async fn handle(provider: &AppProvider, job: Self) -> anyhow::Result<()> {
     thread::sleep(Duration::from_millis(100));
     let tx_objects: Vec<Object> = serde_json::from_str(&job.objects)?;
     let mut objects = Vec::<UpdateObjectArgs>::new();
@@ -113,36 +121,30 @@ impl BaseJob<ParseObjectsFieldsJobPayload> for ParseObjectsFieldsJob {
     Ok(())
   }
 
-  async fn dispatch(provider: &AppProvider, payload: MessageContent) -> Result<()> {
+  async fn dispatch(self, provider: &AppProvider) -> Result<()> {
     let mut connection = provider.worker_client.get_multiplexed_tokio_connection().await?;
     let client = Arc::clone(&provider.http_client);
-    match payload {
-      MessageContent::ParseObjectsFields(_) => {
-        ParseObjectsFieldsJob::send(&mut connection, client, payload).await?;
-      }
-      _ => {
-        return Err(Error::msg("[ParseObjectsFieldsJob]: Invalid payload"));
-      }
-    }
+    ParseObjectsFieldsJob::send(
+      &mut connection,
+      client,
+      MessageContent::ParseObjectsFields(self)
+    ).await?;
 
     Ok(())
   }
 
   async fn dispatch_current(
+    self,
     provider: &AppProvider,
-    all_tasks: Arc<RwLock<VecDeque<Task>>>,
-    payload: MessageContent
+    all_tasks: Arc<RwLock<VecDeque<Task>>>
   ) -> Result<()> {
     let mut connection = provider.worker_client.get_multiplexed_tokio_connection().await?;
 
-    match payload {
-      MessageContent::ParseObjectsFields(_) => {
-        ParseObjectsFieldsJob::send_current(&mut connection, all_tasks, payload).await?;
-      }
-      _ => {
-        return Err(Error::msg("[ParseObjectsFieldsJob]: Invalid payload"));
-      }
-    }
+    ParseObjectsFieldsJob::send_current(
+      &mut connection,
+      all_tasks,
+      MessageContent::ParseObjectsFields(self)
+    ).await?;
 
     Ok(())
   }

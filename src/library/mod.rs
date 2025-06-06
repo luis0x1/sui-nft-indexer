@@ -9,3 +9,5 @@ pub mod object_wrapper;
 pub mod pg;
 pub mod object;
 pub mod blacklist_resolver;
+pub mod checkpoint;
+pub mod rescan_checkpoint;

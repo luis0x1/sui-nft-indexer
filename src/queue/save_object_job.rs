@@ -15,9 +15,9 @@ use crate::{
 
 use super::{
   base_job::{ BaseJob, MessageContent, Task },
-  parse_object_fields_job::{ ParseObjectsFieldsJob, ParseObjectsFieldsJobPayload },
+  parse_object_fields_job::ParseObjectsFieldsJob,
 };
-use anyhow::{ Error, Result };
+use anyhow::{ Result, Error };
 use async_trait::async_trait;
 use move_core_types::{ annotated_value::MoveStruct, language_storage::StructTag };
 use serde::{ Deserialize, Serialize };
@@ -30,16 +30,30 @@ use sui_types::{
 };
 use tokio::sync::RwLock;
 
-pub struct SaveObjectsJob;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SaveObjectsJobPayload {
+pub struct SaveObjectsJob {
   pub objects: String,
 }
 
+impl From<String> for SaveObjectsJob {
+  fn from(value: String) -> Self {
+    Self {
+      objects: value,
+    }
+  }
+}
+
+impl TryFrom<&Vec<TransactionObject>> for SaveObjectsJob {
+  type Error = Error;
+
+  fn try_from(value: &Vec<TransactionObject>) -> std::result::Result<Self, Self::Error> {
+    Ok(Self { objects: serde_json::to_string(value)? })
+  }
+}
+
 #[async_trait]
-impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
-  async fn handle(provider: &AppProvider, job: SaveObjectsJobPayload) -> anyhow::Result<()> {
+impl BaseJob for SaveObjectsJob {
+  async fn handle(provider: &AppProvider, job: Self) -> anyhow::Result<()> {
     let tx_objects: Vec<TransactionObject> = serde_json::from_str(&job.objects)?;
     let mut objects = Vec::<SuiObject>::new();
     let mut objects_failed = Vec::<Object>::new();
@@ -157,47 +171,32 @@ impl BaseJob<SaveObjectsJobPayload> for SaveObjectsJob {
 
     insert_objects(provider, objects).await?;
     if objects_failed.len() > 0 {
-      ParseObjectsFieldsJob::dispatch(
-        provider,
-        MessageContent::ParseObjectsFields(ParseObjectsFieldsJobPayload {
-          objects: serde_json::to_string(&objects_failed)?,
-        })
-      ).await?;
+      ParseObjectsFieldsJob::try_from(objects_failed)?.dispatch(provider).await?;
     }
 
     Ok(())
   }
 
-  async fn dispatch(provider: &AppProvider, payload: MessageContent) -> Result<()> {
+  async fn dispatch(self, provider: &AppProvider) -> Result<()> {
     let mut connection = provider.worker_client.get_multiplexed_tokio_connection().await?;
     let client = Arc::clone(&provider.http_client);
-    match payload {
-      MessageContent::SaveObjects(_) => {
-        SaveObjectsJob::send(&mut connection, client, payload).await?;
-      }
-      _ => {
-        return Err(Error::msg("[SaveObjectJob]: Invalid payload"));
-      }
-    }
+    SaveObjectsJob::send(&mut connection, client, MessageContent::SaveObjects(self)).await?;
 
     Ok(())
   }
 
   async fn dispatch_current(
+    self,
     provider: &AppProvider,
-    all_tasks: Arc<RwLock<VecDeque<Task>>>,
-    payload: MessageContent
+    all_tasks: Arc<RwLock<VecDeque<Task>>>
   ) -> Result<()> {
     let mut connection = provider.worker_client.get_multiplexed_tokio_connection().await?;
 
-    match payload {
-      MessageContent::SaveObjects(_) => {
-        SaveObjectsJob::send_current(&mut connection, all_tasks, payload).await?;
-      }
-      _ => {
-        return Err(Error::msg("[SaveObjectJob]: Invalid payload"));
-      }
-    }
+    SaveObjectsJob::send_current(
+      &mut connection,
+      all_tasks,
+      MessageContent::SaveObjects(self)
+    ).await?;
 
     Ok(())
   }
@@ -209,9 +208,7 @@ fn get_object_owner_address(object: &Object) -> String {
     Owner::ObjectOwner(addr) => addr.to_string(),
     Owner::Immutable => "Immutable".to_string(),
     Owner::Shared { initial_shared_version } => format!("Shared({})", initial_shared_version),
-    Owner::ConsensusV2 { start_version: _, authenticator } => {
-      authenticator.as_single_owner().to_string()
-    }
+    Owner::ConsensusAddressOwner { start_version: _, owner } => { owner.to_string() }
   }
 }
 

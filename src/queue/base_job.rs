@@ -7,11 +7,10 @@ use serde::{ Deserialize, Serialize };
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use reqwest::Client as HttpClient;
-use crate::{ env::{ get_env, AppType }, scan_worker::AppProvider };
-
-use super::{
-  parse_object_fields_job::ParseObjectsFieldsJobPayload,
-  save_object_job::SaveObjectsJobPayload,
+use crate::{
+  env::{ get_env, AppType },
+  queue::{handle_failed_checkpoint_job::HandleFailedCheckpointJob, parse_object_fields_job::ParseObjectsFieldsJob, save_object_job::SaveObjectsJob},
+  scan_worker::AppProvider,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,8 +18,9 @@ pub enum MessageContent {
   I32(i32),
   I128(i128),
   String(String),
-  SaveObjects(SaveObjectsJobPayload),
-  ParseObjectsFields(ParseObjectsFieldsJobPayload),
+  SaveObjects(SaveObjectsJob),
+  ParseObjectsFields(ParseObjectsFieldsJob),
+  HandleFailedCheckpoint(HandleFailedCheckpointJob),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,15 +43,15 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn next_retry(&self) -> Option<Self> {
-      if self.retry_count >= 3 {
-        return None;
-      }
-
-      let mut new_task = self.clone();
-      new_task.retry_count += 1;
-      Some(new_task)
+  pub fn next_retry(&self) -> Option<Self> {
+    if self.retry_count >= 3 {
+      return None;
     }
+
+    let mut new_task = self.clone();
+    new_task.retry_count += 1;
+    Some(new_task)
+  }
 }
 
 impl From<Message> for Task {
@@ -77,15 +77,15 @@ impl ToRedisArgs for PubSubMessage {
 }
 
 #[async_trait]
-pub trait BaseJob<T> {
+pub trait BaseJob {
   #[allow(unused)]
-  async fn handle(provider: &AppProvider, job: T) -> Result<()>;
+  async fn handle(provider: &AppProvider, job: Self) -> Result<()>;
   #[allow(unused)]
-  async fn dispatch(provider: &AppProvider, payload: MessageContent) -> Result<()>;
+  async fn dispatch(self, provider: &AppProvider) -> Result<()>;
   async fn dispatch_current(
+    self,
     provider: &AppProvider,
-    all_tasks: Arc<RwLock<VecDeque<Task>>>,
-    payload: MessageContent
+    all_tasks: Arc<RwLock<VecDeque<Task>>>
   ) -> Result<()>;
   async fn send(
     redis_connection: &mut MultiplexedConnection,

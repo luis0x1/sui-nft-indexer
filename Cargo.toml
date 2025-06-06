@@ -10,7 +10,6 @@ sui_types = { git = "https://github.com/mystenlabs/sui", package = "sui-types"}
 sui_sdk = { git = "https://github.com/mystenlabs/sui", package = "sui-sdk"}
 move_core_types = { git = "https://github.com/mystenlabs/sui", package = "move-core-types"}
 sui_package_resolver = { git = "https://github.com/mystenlabs/sui", package = "sui-package-resolver"}
-sui_data_ingestion_core = { git = "https://github.com/mystenlabs/sui", package = "sui-data-ingestion-core"}
 move_binary_format = { git = "https://github.com/mystenlabs/sui", package = "move-binary-format"}
 anyhow = "1.0.86"
 serde_json = "1.0.140"
@@ -23,10 +22,12 @@ redis = { version = "0.30.0", features = ["tokio-comp"] }
 futures = "0.3.31"
 uuid = { version = "1.16.0", features = ["v4"] }
 axum = "0.7.9"
-reqwest = "0.12.15"
+reqwest = { version="0.12.15", features = ["rustls-tls"] }
 async-scoped = { version = "0.9.0", features = ["use-tokio"] }
 native-tls = "0.2.14"
 postgres-native-tls = "0.5.1"
+bcs = "0.1.6"
+tap = "1.0.1"
 
 # [[bin]]
 # name = "worker"

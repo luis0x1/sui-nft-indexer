@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{ Deserialize, Serialize };
 use sui_types::{ base_types::SuiAddress, object::Data };
 
-use crate::{ scan_worker::AppProvider, transaction::SuiObject };
+use crate::{ scan_worker::AppProvider, transaction::{ SuiObject, SuiObjectStatus } };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
@@ -70,6 +70,27 @@ fn parse_object_display_to_sql(object: &SuiObject) -> String {
   }
 }
 
+fn iter_to_values<'a, T>(objects: impl Iterator<Item = &'a SuiObject>) -> String {
+  objects
+    .map(|object| {
+      format!(
+        r#"('{}', '{}', {}, '{}'::"ObjectStatus", '{}', $${}$$::jsonb, $${}$$::jsonb, '{}'::bigint, '{}'::timestamp, '{}'::timestamp)"#,
+        object.id(),
+        object.owner(),
+        parse_object_type_to_sql(object),
+        object.status().to_string(),
+        "[]",
+        parse_object_content_to_sql(object),
+        parse_object_display_to_sql(object),
+        object.version(),
+        object.updated_at(),
+        object.updated_at()
+      )
+    })
+    .collect::<Vec<String>>()
+    .join(",")
+}
+
 pub async fn insert_objects(provider: &AppProvider, objects: Vec<SuiObject>) -> Result<()> {
   // Process objects in batches to avoid huge SQL queries
   const BATCH_SIZE: usize = 1000;
@@ -77,28 +98,19 @@ pub async fn insert_objects(provider: &AppProvider, objects: Vec<SuiObject>) -> 
   let pg_client = provider.pg_client();
 
   for chunk in objects.chunks(BATCH_SIZE) {
-    let values = chunk
-      .iter()
-      .map(|object| {
-        format!(
-          r#"('{}', '{}', {}, '{}'::"ObjectStatus", '{}', $${}$$::jsonb, $${}$$::jsonb, '{}'::bigint, '{}'::timestamp, '{}'::timestamp)"#,
-          object.id(),
-          object.owner(),
-          parse_object_type_to_sql(object),
-          object.status().to_string(),
-          "[]",
-          parse_object_content_to_sql(object),
-          parse_object_display_to_sql(object),
-          object.version(),
-          object.updated_at(),
-          object.updated_at()
-        )
-      })
-      .collect::<Vec<String>>()
-      .join(",");
+    let values = chunk.iter();
 
-    let query = format!(
-      r#"
+    let updated_objects_values = iter_to_values::<SuiObject>(
+      values.clone().filter(|object| object.status != SuiObjectStatus::Deleted)
+    );
+
+    let removed_objects_values = iter_to_values::<SuiObject>(
+      values.filter(|object| object.status == SuiObjectStatus::Deleted)
+    );
+
+    if updated_objects_values.len() > 0 {
+      let query = format!(
+        r#"
       INSERT INTO objects (id, owner, type, status, field_raw, fields, display, version, updated_at, created_at)
       VALUES {}
       ON CONFLICT (id)
@@ -110,14 +122,32 @@ pub async fn insert_objects(provider: &AppProvider, objects: Vec<SuiObject>) -> 
           display = CASE WHEN EXCLUDED.display <> '{}'::jsonb THEN EXCLUDED.display ELSE objects.display END,
           version = EXCLUDED.version,
           updated_at = EXCLUDED.updated_at
-      WHERE objects.updated_at < EXCLUDED.updated_at
+      WHERE objects.version < EXCLUDED.version
       "#,
-      values,
-      "{}",
-      "{}"
-    );
+        updated_objects_values,
+        "{}",
+        "{}"
+      );
 
-    pg_client.query(query.as_str(), &[]).await?;
+      pg_client.query(query.as_str(), &[]).await?;
+    }    
+    
+    if removed_objects_values.len() > 0 {
+      let query = format!(
+        r#"
+      INSERT INTO objects (id, owner, type, status, field_raw, fields, display, version, updated_at, created_at)
+      VALUES {}
+      ON CONFLICT (id)
+      DO UPDATE
+      SET owner = EXCLUDED.owner,
+          status = EXCLUDED.status
+      WHERE objects.version < EXCLUDED.version
+      "#,
+        removed_objects_values,
+      );
+
+      pg_client.query(query.as_str(), &[]).await?;
+    }
   }
 
   Ok(())
@@ -165,7 +195,8 @@ pub async fn update_objects_fields(
     let remove_objects = chunk.iter().filter(|o| o.is_remove);
 
     let _updating_object = {
-      let values = update_objects.clone()
+      let values = update_objects
+        .clone()
         .map(|object| {
           format!(
             r#"('{}', '{}'::bigint, $${}$$::jsonb, $${}$$::jsonb)"#,
@@ -192,7 +223,10 @@ pub async fn update_objects_fields(
     };
 
     let _removing_object = {
-      let values = remove_objects.clone().map(|object| object.id.as_str()).collect::<Vec<&str>>();
+      let values = remove_objects
+        .clone()
+        .map(|object| object.id.as_str())
+        .collect::<Vec<&str>>();
 
       if values.len() > 0 {
         pg_client.query(r#"DELETE FROM objects

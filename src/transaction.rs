@@ -10,7 +10,7 @@ use sui_types::{
   object::{ Data, Object },
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum SuiObjectStatus {
   #[serde(rename = "created")]
   Created,

@@ -8,9 +8,7 @@ use async_scoped::TokioScope;
 use crate::{
   env::get_env,
   queue::{
-    base_job::{ BaseJob, Message, MessageContent, PubSubMessage, Task },
-    parse_object_fields_job::ParseObjectsFieldsJob,
-    save_object_job::SaveObjectsJob,
+    base_job::{ BaseJob, Message, MessageContent, PubSubMessage, Task }, handle_failed_checkpoint_job::HandleFailedCheckpointJob, parse_object_fields_job::ParseObjectsFieldsJob, save_object_job::SaveObjectsJob
   },
   scan_worker::AppProvider,
 };
@@ -216,6 +214,10 @@ async fn _process_task(
     MessageContent::ParseObjectsFields(job) => {
       task_type = "ParseObjectsFields".to_string();
       ParseObjectsFieldsJob::handle(provider, job).await
+    }
+    MessageContent::HandleFailedCheckpoint(job) => {
+      task_type = "HandleFailedCheckpoint".to_string();
+      HandleFailedCheckpointJob::handle(provider, job).await
     }
     _ => {
       return Err(Error::msg("Job is not support"));

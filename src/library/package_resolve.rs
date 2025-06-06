@@ -1,10 +1,11 @@
 use std::{ str::FromStr, sync::Arc };
 
 use anyhow::{ anyhow, Error, Result };
-use move_core_types::annotated_value::MoveStruct;
+use move_core_types::{ annotated_value::MoveStruct, language_storage::StructTag };
 use serde::{ Deserialize, Serialize };
 use sui_package_resolver::Package;
 use sui_sdk::rpc_types::{
+  ObjectChange,
   SuiObjectData,
   SuiObjectDataOptions,
   SuiObjectResponse,
@@ -22,6 +23,9 @@ use sui_types::{
 use crate::{ scan_worker::AppProvider, utils::error::OBJECT_NOT_FOUND_LOCAL };
 
 use super::{ display::{ StoredDisplay }, sui_client::SuiClientProvider };
+
+const UPGRADE_CAP: &'static str = "2::package::UpgradeCap";
+const DISPLAY_OBJECT: &'static str = "2::display::Display";
 
 pub struct PackageResolver {}
 
@@ -368,9 +372,22 @@ impl PackageResolver {
         let object_ids = &Arc::new(
           object_changes
             .iter()
+            .filter(|obj| {
+              let Some(object_type) = get_object_struct_tag(obj) else {
+                return false;
+              };
+
+              let obj_type_str = object_type.to_string();
+
+              return obj_type_str.ends_with(UPGRADE_CAP) || obj_type_str.contains(DISPLAY_OBJECT);
+            })
             .map(|obj| obj.object_id())
             .collect::<Vec<ObjectID>>()
         );
+
+        if object_ids.len() == 0 {
+          return Ok(package_objects);
+        }
 
         let objects_res = Self::get_all_objects(sui_client, object_ids).await;
 
@@ -421,7 +438,7 @@ impl PackageResolver {
   }
 
   fn handle_upgraded_cap(type_id: &String, data: &SuiObjectData) -> Option<PackagePublishObject> {
-    if type_id.ends_with("2::package::UpgradeCap") {
+    if type_id.ends_with(UPGRADE_CAP) {
       if let Some(content) = &data.content {
         if let SuiParsedData::MoveObject(object_data) = content {
           let new_pkg_id = object_data.fields.field_value("package");
@@ -441,7 +458,7 @@ impl PackageResolver {
   }
 
   fn handle_display(type_id: &String, data: &SuiObjectData) -> Option<PackagePublishObject> {
-    if type_id.contains("2::display::Display") {
+    if type_id.contains(DISPLAY_OBJECT) {
       if let Some(content) = &data.content {
         if let SuiParsedData::MoveObject(object_data) = content {
           let fields = object_data.fields.clone().to_json_value();
@@ -459,5 +476,16 @@ impl PackageResolver {
     }
 
     None
+  }
+}
+
+fn get_object_struct_tag<'a>(object: &'a ObjectChange) -> Option<&'a StructTag> {
+  match object {
+    ObjectChange::Created { object_type, .. } => Some(object_type),
+    ObjectChange::Mutated { object_type, .. } => Some(object_type),
+    ObjectChange::Deleted { object_type, .. } => Some(object_type),
+    ObjectChange::Transferred { object_type, .. } => Some(object_type),
+    ObjectChange::Wrapped { object_type, .. } => Some(object_type),
+    ObjectChange::Published { .. } => None,
   }
 }

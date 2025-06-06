@@ -1,9 +1,7 @@
 use std::{ sync::Arc, thread, time::{ Duration, SystemTime } };
 
 use anyhow::Result;
-use async_trait::async_trait;
 use redis::AsyncCommands;
-use sui_data_ingestion_core::Worker;
 use sui_types::{ full_checkpoint_content::CheckpointData };
 use tokio::{ sync::{ Mutex, MutexGuard }, task::JoinHandle };
 use tokio_postgres::Client;
@@ -16,10 +14,7 @@ use crate::{
     pg::get_postgres_connection,
     sui_client::SuiClientProvider,
   },
-  queue::{
-    base_job::{ BaseJob, MessageContent },
-    save_object_job::{ SaveObjectsJob, SaveObjectsJobPayload },
-  },
+  queue::{ base_job::BaseJob, handle_failed_checkpoint_job::HandleFailedCheckpointJob, save_object_job::SaveObjectsJob },
   transaction::get_all_object_checkpoint,
   utils::btree_map::BTreeMapLimit,
 };
@@ -164,6 +159,7 @@ async fn process_checkpoint_clone(
   provider: &AppProvider,
   checkpoint: &CheckpointData
 ) -> Result<()> {
+  println!("start handle checkpoint {:?}", checkpoint.checkpoint_summary.sequence_number);
   let start = SystemTime::now();
   // custom processing logic
   // print out the checkpoint number
@@ -228,12 +224,7 @@ async fn process_checkpoint_clone(
   // }
 
   if object_len > 0 {
-    let res = SaveObjectsJob::dispatch(
-      &provider,
-      MessageContent::SaveObjects(SaveObjectsJobPayload {
-        objects: serde_json::to_string(&transaction_objects)?,
-      })
-    ).await;
+    let res = SaveObjectsJob::try_from(&transaction_objects)?.dispatch(&provider).await;
 
     if res.is_err() {
       eprintln!(
@@ -295,6 +286,13 @@ impl IndexerWorker {
           LAST_CHECKED = current_checkpoint;
         }
       }
+    } else if env_var.start_checkpoint.is_some() {
+      let value = env_var.start_checkpoint.value();
+      unsafe {
+        has_latest_checkpoint = true;
+        CURRENT_CHECKPOINT = value;
+        LAST_CHECKED = value;
+      }
     } else {
       let current_checkpoint_res: Result<String, _> = checkpoint_conn.get("checkpoint").await;
 
@@ -354,12 +352,18 @@ impl IndexerWorker {
   }
 }
 
-#[async_trait]
-impl Worker for IndexerWorker {
-  type Result = ();
-  async fn process_checkpoint(&self, checkpoint: &CheckpointData) -> Result<()> {
+impl IndexerWorker {
+  pub async fn process_checkpoint(
+    &self,
+    checkpoint_sequence: u64,
+    data: Option<CheckpointData>
+  ) -> Result<()> {
     let provider = self.provider();
-    process_checkpoint_clone(provider, &checkpoint.clone()).await?;
+    if let Some(checkpoint) = data {
+      process_checkpoint_clone(provider, &checkpoint.clone()).await?;
+    } else {
+      HandleFailedCheckpointJob(checkpoint_sequence).dispatch(provider).await?;
+    }
     Ok(())
   }
 }
