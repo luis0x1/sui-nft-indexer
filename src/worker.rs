@@ -2,23 +2,27 @@ use anyhow::{ Result, Error };
 use redis::{ aio::MultiplexedConnection, AsyncCommands, Client as RedisClient };
 use tokio::{ sync::RwLock, time::Instant };
 use axum::{ routing::{ get, post }, Extension, Json, Router, http::StatusCode };
-use std::{ collections::VecDeque, sync::Arc, thread, time::Duration };
+use std::{ sync::Arc, thread, time::Duration };
 use async_scoped::TokioScope;
 
 use crate::{
   env::get_env,
   queue::{
-    base_job::{ BaseJob, Message, MessageContent, PubSubMessage, Task }, handle_failed_checkpoint_job::HandleFailedCheckpointJob, parse_object_fields_job::ParseObjectsFieldsJob, save_object_job::SaveObjectsJob
+    base_job::{ BaseJob, Message, MessageContent, PubSubMessage, Task },
+    handle_failed_checkpoint_job::HandleFailedCheckpointJob,
+    parse_object_fields_job::ParseObjectsFieldsJob,
+    save_object_job::SaveObjectsJob,
   },
   scan_worker::AppProvider,
+  utils::async_vec::AsyncVecDeque,
 };
 
 pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
   let provider = Arc::new(AppProvider::init().await?);
   let start = Instant::now();
-  let all_task = Arc::new(RwLock::new(init_task(&provider.worker_client).await?));
+  let all_task = Arc::new(init_task(&provider.worker_client).await?);
   let stop = Instant::now();
-  println!("take tasks cost: {:?} with length: {:?}", stop - start, all_task.read().await.len());
+  println!("take tasks cost: {:?} with length: {:?}", stop - start, all_task.len().await);
 
   // Subscribe vào channel
   let task_subscriber = Arc::clone(&all_task);
@@ -43,26 +47,13 @@ pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
         match client_clone.get_multiplexed_tokio_connection().await {
           Ok(ref mut connection) => {
             loop {
-              let tasks_read = all_task_clone.read().await;
-              if tasks_read.len() == 0 {
-                drop(tasks_read);
-                continue;
-              }
-
-              drop(tasks_read);
-
-              let mut tasks_locked = all_task_clone.write().await;
-              let task_taked = tasks_locked.pop_front();
-              drop(tasks_locked);
-
-              if let Some(task) = task_taked {
-                process_task(
-                  &provider_clone,
-                  connection,
-                  Arc::clone(&all_task_clone),
-                  Arc::new(task)
-                ).await;
-              }
+              let task_taked = all_task_clone.take().await;
+              process_task(
+                &provider_clone,
+                connection,
+                Arc::clone(&all_task_clone),
+                Arc::new(task_taked)
+              ).await;
               thread::sleep(Duration::from_millis(10));
             }
           }
@@ -77,8 +68,8 @@ pub async fn setup_worker_flow(concurrency: u8) -> Result<()> {
   Ok(())
 }
 
-async fn init_task(redis_client: &Arc<RedisClient>) -> Result<VecDeque<Task>> {
-  let mut tasks = VecDeque::<Task>::new();
+async fn init_task(redis_client: &Arc<RedisClient>) -> Result<AsyncVecDeque<Task>> {
+  let tasks = AsyncVecDeque::<Task>::new();
   let mut cursor = "0".to_string();
   let mut conn = redis_client.get_multiplexed_tokio_connection().await?;
 
@@ -100,7 +91,11 @@ async fn init_task(redis_client: &Arc<RedisClient>) -> Result<VecDeque<Task>> {
       if items.len() > 0 {
         let message: Result<Message, _> = serde_json::from_str(&items[0]);
         if message.is_ok() {
-          tasks.push_back(Task { key: message_key, payload: message.unwrap(), retry_count: 0 });
+          tasks.push_back(Task {
+            key: message_key,
+            payload: message.unwrap(),
+            retry_count: 0,
+          }).await;
         } else {
           println!("messages error: {:?}", message.unwrap_err());
         }
@@ -111,20 +106,17 @@ async fn init_task(redis_client: &Arc<RedisClient>) -> Result<VecDeque<Task>> {
       break;
     }
   }
-  println!("messages: {:?}", tasks.len());
+  println!("messages: {:?}", tasks.len().await);
 
   Ok(tasks)
 }
 
 struct AppState {
   redis_conn: Arc<RwLock<MultiplexedConnection>>,
-  all_task: Arc<RwLock<VecDeque<Task>>>,
+  all_task: Arc<AsyncVecDeque<Task>>,
 }
 
-async fn subscriber(
-  client: &Arc<RedisClient>,
-  all_task: &Arc<RwLock<VecDeque<Task>>>
-) -> Result<()> {
+async fn subscriber(client: &Arc<RedisClient>, all_task: &Arc<AsyncVecDeque<Task>>) -> Result<()> {
   let conn = client.get_multiplexed_tokio_connection().await?;
 
   println!("> Subscribed to '{}'", get_env().channel_id);
@@ -166,9 +158,8 @@ async fn on_message(
       let task_data: Result<Message, _> = serde_json::from_str(&task);
       if let Ok(message) = task_data {
         println!("-> Received from api {:?} successfully", message_key);
-        let mut app_task = state.all_task.write().await;
-        app_task.push_back(message.into());
-        drop(app_task);
+
+        state.all_task.push_back(message.into()).await;
       }
     } else {
       eprintln!("Error key: {:?} -> {:?}", message_key, task_res.unwrap_err());
@@ -181,7 +172,7 @@ async fn on_message(
 async fn process_task(
   provider: &Arc<AppProvider>,
   redis_connection: &mut MultiplexedConnection,
-  all_tasks: Arc<RwLock<VecDeque<Task>>>,
+  all_tasks: Arc<AsyncVecDeque<Task>>,
   task: Arc<Task>
 ) {
   let res = _process_task(provider, redis_connection, all_tasks, &task).await;
@@ -201,7 +192,7 @@ async fn process_task(
 async fn _process_task(
   provider: &Arc<AppProvider>,
   redis_connection: &mut MultiplexedConnection,
-  all_tasks: Arc<RwLock<VecDeque<Task>>>,
+  all_tasks: Arc<AsyncVecDeque<Task>>,
   task: &Task
 ) -> Result<String> {
   let task_type: String;
@@ -226,9 +217,7 @@ async fn _process_task(
 
   if let Err(error) = res {
     if let Some(new_task) = task.next_retry() {
-      let mut tasks_locked = all_tasks.write().await;
-      tasks_locked.push_back(new_task);
-      drop(tasks_locked);
+      all_tasks.push_back(new_task).await;
     } else {
       let _: () = redis_connection.del(&task.key).await?;
       return Err(error);

@@ -67,7 +67,7 @@ pub async fn retry_with_options<T, R, S>(callback: T, options: RetryOptions) -> 
         delay *= index as u32;
 
         if index < count {
-          thread::sleep(Duration::from_secs(delay as u64));
+          thread::sleep(Duration::from_millis(delay as u64));
           continue;
         }
 
