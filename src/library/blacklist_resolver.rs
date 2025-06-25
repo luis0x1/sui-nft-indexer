@@ -9,7 +9,10 @@ impl BlacklistResolver {
     if let Some(is_blacklist) = provider.is_blacklist(object_type).await {
       return is_blacklist;
     }
-    let pg_client = provider.pg_client();
+    let Ok(pg_client) = provider.pg_client().await else {
+      return false;
+    };
+
     let exists_res = pg_client.query(
       "SELECT EXISTS(SELECT id FROM blacklist_struct WHERE object_type = $1)",
       &[&object_type]
@@ -35,7 +38,7 @@ impl BlacklistResolver {
     provider.set_blacklist(object_type, is_blacklist).await;
 
     if is_blacklist {
-      let pg_client = provider.pg_client();
+      let pg_client = provider.pg_client().await?;
       let _ = pg_client.query(
         "INSERT INTO blacklist_struct(object_type)
           VALUES($1) ON CONFLICT(object_type)

@@ -51,6 +51,18 @@ impl<T> AsyncVecDeque<T> {
       self.notify.notified().await;
     }
   }
+  
+  pub async fn take_with_len(&self) -> (T, usize) {
+    loop {
+      let mut queue = self.inner.lock().await;
+      if let Some(item) = queue.pop_front() {
+        return (item, queue.len());
+      }
+      drop(queue);
+
+      self.notify.notified().await;
+    }
+  }
 
   pub async fn try_take(&self) -> Option<T> {
     let mut queue = self.inner.lock().await;

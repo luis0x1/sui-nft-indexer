@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 #[macro_export]
 macro_rules! string {
     ($s:expr) => {
@@ -8,4 +10,8 @@ macro_rules! string {
 pub fn to_string<T>(value: T) -> String
 where T: ToString {
     value.to_string()
+}
+
+pub const fn lazy<T>(v: fn() -> T) -> LazyLock<T, fn() -> T> {
+    LazyLock::new(v)
 }

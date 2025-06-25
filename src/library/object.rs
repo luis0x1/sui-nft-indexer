@@ -95,7 +95,7 @@ pub async fn insert_objects(provider: &AppProvider, objects: Vec<SuiObject>) -> 
   // Process objects in batches to avoid huge SQL queries
   const BATCH_SIZE: usize = 1000;
 
-  let pg_client = provider.pg_client();
+  let pg_client = provider.pg_client().await?;
 
   for chunk in objects.chunks(BATCH_SIZE) {
     let values = chunk.iter();
@@ -162,7 +162,7 @@ pub struct UpdateObjectArgs {
 }
 
 pub async fn update_object_fields(provider: &AppProvider, args: UpdateObjectArgs) -> Result<()> {
-  let pg_client = &provider.pg_client;
+  let pg_client = &provider.pg_client().await?;
 
   if args.is_remove {
     let query = r#"DELETE FROM objects
@@ -188,7 +188,7 @@ pub async fn update_objects_fields(
   args: Vec<UpdateObjectArgs>
 ) -> Result<()> {
   const BATCH_SIZE: usize = 1000;
-  let pg_client = &provider.pg_client;
+  let pg_client = &provider.pg_client().await?;
 
   for chunk in args.chunks(BATCH_SIZE) {
     let update_objects = chunk.iter().filter(|o| !o.is_remove);

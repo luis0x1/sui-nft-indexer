@@ -87,7 +87,7 @@ impl StructResolver {
     data_type: &DataDefWrapper,
     version: u64
   ) -> Result<()> {
-    let pg_client = provider.pg_client();
+    let pg_client = provider.pg_client().await?;
 
     let seried_value = serde_json::to_string(&data_type)?;
 
